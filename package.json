@@ -1,0 +1,36 @@
+{
+  "name": "lumen-whatsapp",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc --noEmit && vite build",
+    "package": "npm run build && node scripts/package-offline.mjs",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:e2e": "node tests/e2e/run.mjs",
+    "mock": "node mock/server.mjs",
+    "icons": "node scripts/generate-icons.mjs"
+  },
+  "dependencies": {
+    "@wearables-ui-toolkit/icons": "129.0.0",
+    "@wearables-ui-toolkit/mrbd": "129.0.0",
+    "react": "19.2.7",
+    "react-dom": "19.2.7",
+    "react-router-dom": "7.17.0"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "6.1.1",
+    "fflate": "0.8.3",
+    "playwright": "1.55.0",
+    "sharp": "0.35.4",
+    "typescript": "5.9.3",
+    "vite": "8.0.0",
+    "vitest": "5.0.2"
+  },
+  "description": "WhatsApp client (Evolution API v2) for Rokid Lumen glasses, built as a Meta Ray-Ban Display web app."
+}
