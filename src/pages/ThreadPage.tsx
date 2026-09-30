@@ -1,13 +1,18 @@
+import imageFilled from '@wearables-ui-toolkit/icons/svg/image__filled.svg';
+import microphoneFilled from '@wearables-ui-toolkit/icons/svg/microphone__filled.svg';
 import {
+  Button,
+  ButtonRail,
   InputTextView,
   Page,
   TextStyle,
   TextView,
   Toast,
   VerticalList,
+  type ButtonHandle,
 } from '@wearables-ui-toolkit/mrbd';
 import {useCallback, useEffect, useLayoutEffect, useRef, useState, type FocusEvent} from 'react';
-import {Navigate, useParams} from 'react-router-dom';
+import {Navigate, useLocation, useNavigate, useParams} from 'react-router-dom';
 import {MessageBubble} from '../components/MessageBubble';
 import type {EvolutionErrorKind} from '../evolution/client';
 import {isGroupJid, type ChatMessage} from '../evolution/parse';
@@ -24,7 +29,6 @@ const FAILURE_REASONS: Record<EvolutionErrorKind, StringKey> = {
   server: 'reasonServer',
 };
 
-const REPLY_FIELD_ID = 'reply-field';
 const QUOTE_SNIPPET_LENGTH = 24;
 
 function snippet(text: string): string {
@@ -53,20 +57,57 @@ export function ThreadPage() {
 }
 
 function Thread({jid}: {jid: string}) {
-  const {chatFor, thread, openThread, sendText, offline} = useWhatsApp();
+  const {chatFor, thread, openThread, sendText, sendReaction, offline} = useWhatsApp();
+  const location = useLocation();
+  const navigate = useNavigate();
   const chat = chatFor(jid);
   const name = chatDisplayName(jid, chat?.name);
-  const {loaded, messages} = thread(jid);
+  const {loaded, synced, messages} = thread(jid);
   const isGroup = chat?.isGroup ?? isGroupJid(jid);
 
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
-  // Message picked (Enter on a bubble) to reply to; Enter again cancels it.
+  const [tails, setTails] = useState(true);
+  // Message chosen with the bubble menu's Reply; sent as a quoted reply.
   const [quoted, setQuoted] = useState<ChatMessage | null>(null);
-  const selectQuote = useCallback((message: ChatMessage) => {
-    setQuoted(current => (current?.id === message.id ? null : message));
-    document.getElementById(REPLY_FIELD_ID)?.focus({preventScroll: true});
-  }, []);
+  const replyButtonRef = useRef<ButtonHandle>(null);
+
+  const composerOpen =
+    location.state != null &&
+    typeof location.state === 'object' &&
+    'replyComposer' in location.state &&
+    location.state.replyComposer === true;
+  const composerWasOpenRef = useRef(false);
+  useLayoutEffect(() => {
+    if (composerWasOpenRef.current && !composerOpen) {
+      setDraft('');
+      setQuoted(null);
+      replyButtonRef.current?.getElement()?.focus({preventScroll: true});
+    }
+    composerWasOpenRef.current = composerOpen;
+  }, [composerOpen]);
+
+  const openComposer = useCallback(
+    (message: ChatMessage | null) => {
+      setQuoted(message);
+      if (!composerOpen) {
+        navigate(location.pathname, {state: {replyComposer: true}});
+      }
+    },
+    [composerOpen, location.pathname, navigate],
+  );
+  const startReply = useCallback(() => openComposer(null), [openComposer]);
+  const toggleTails = useCallback(() => setTails(current => !current), []);
+
+  const react = useCallback(
+    (message: ChatMessage, emoji: string) => {
+      sendReaction(message, emoji)
+        .then(() => Toast.show(t('reactionSent', {emoji})))
+        .catch(error => Toast.show(t('reactionFailed', {reason: failureReason(error)})));
+    },
+    [sendReaction],
+  );
+
   // Marks the end of the conversation (below the newest bubble and its time).
   const endRef = useRef<HTMLDivElement>(null);
   const lastMessageId = messages.length ? messages[messages.length - 1].id : null;
@@ -107,16 +148,16 @@ function Thread({jid}: {jid: string}) {
       setSending(true);
       sendText(jid, body, quoted)
         .then(() => {
-          setDraft('');
-          setQuoted(null);
           Toast.show(t('messageSent'));
+          // Closing the composer entry clears the draft and refocuses Reply.
+          navigate(-1);
         })
         .catch(error => {
           Toast.show(t('sendFailed', {reason: failureReason(error)}));
         })
         .finally(() => setSending(false));
     },
-    [jid, quoted, sendText, sending],
+    [jid, navigate, quoted, sendText, sending],
   );
 
   // The host hands focus to the document root while its own text entry (the
@@ -134,64 +175,77 @@ function Thread({jid}: {jid: string}) {
     });
   }, []);
 
-  const statusKey: StringKey | null = !loaded
-    ? 'threadLoadingTitle'
-    : messages.length === 0
-      ? 'threadEmptyTitle'
-      : null;
-
   return (
     <Page
       headerText={name}
-      headerMetadata={offline ? t('offlineMeta') : undefined}
+      headerIsLoading={!synced}
+      headerMetadata={offline && synced ? t('offlineMeta') : undefined}
       enableSystemBarInset={false}>
       <div className="thread-shell">
         <VerticalList
           insetForHeader
           contentClassName="message-list"
           ariaLabel={t('threadLabel', {name})}>
-            {statusKey ? (
-              <div className="thread-status" role="status">
-                <TextView as="p" textStyle={TextStyle.BODY2_EMPHASIZED}>
-                  {t(statusKey)}
-                </TextView>
-                {loaded ? (
-                  <TextView as="p" textStyle={TextStyle.BODY2}>
-                    {t('threadEmptyBody')}
-                  </TextView>
-                ) : null}
-              </div>
-            ) : null}
-            {messages.map((message, index) => (
-              <MessageBubble
-                key={message.id}
-                message={message}
-                showSender={isGroup && !message.fromMe && startsMessageRun(messages, index)}
-                endsRun={endsMessageRun(messages, index)}
-                selected={message.id === quoted?.id}
-                onSelect={selectQuote}
-              />
-            ))}
-            <div className="message-end" ref={endRef} />
+          {loaded && messages.length === 0 ? (
+            <div className="thread-status" role="status">
+              <TextView as="p" textStyle={TextStyle.BODY2_EMPHASIZED}>
+                {t('threadEmptyTitle')}
+              </TextView>
+              <TextView as="p" textStyle={TextStyle.BODY2}>
+                {t('threadEmptyBody')}
+              </TextView>
+            </div>
+          ) : null}
+          {messages.map((message, index) => (
+            <MessageBubble
+              key={message.id}
+              message={message}
+              showSender={isGroup && !message.fromMe && startsMessageRun(messages, index)}
+              endsRun={endsMessageRun(messages, index)}
+              tails={tails}
+              initialFocusEligible={!composerOpen && index === messages.length - 1}
+              onReact={react}
+              onReply={openComposer}
+            />
+          ))}
+          <div className="message-end" ref={endRef} />
         </VerticalList>
         <div className="action-dock">
-          <div className="draft-input">
-            <InputTextView
-              text={draft}
-              hint={quoted ? t('quoteHint', {text: snippet(describeContent(quoted.content))}) : t('replyHint')}
-              actionLabel={t('sendLabel')}
-              loadingLabel={t('sendingLabel')}
-              showLoader={sending}
-              onTextChange={setDraft}
-              onSend={handleSend}
-              inputProps={{
-                'aria-label': t('replyFieldLabel', {name}),
-                id: REPLY_FIELD_ID,
-                onBlur: handleDraftBlur,
-                readOnly: sending,
-              }}
-            />
-          </div>
+          {composerOpen ? (
+            <div className="draft-input">
+              <InputTextView
+                text={draft}
+                hint={quoted ? t('quoteHint', {text: snippet(describeContent(quoted.content))}) : t('replyHint')}
+                actionLabel={t('sendLabel')}
+                loadingLabel={t('sendingLabel')}
+                showLoader={sending}
+                onTextChange={setDraft}
+                onSend={handleSend}
+                inputProps={{
+                  'aria-label': t('replyFieldLabel', {name}),
+                  autoFocus: true,
+                  onBlur: handleDraftBlur,
+                  readOnly: sending,
+                }}
+              />
+            </div>
+          ) : (
+            <ButtonRail centerContentWhenSmallerThanWidth={false} anchorIndex={1}>
+              <Button
+                ref={replyButtonRef}
+                title={t('replyAction')}
+                initialFocusEligible={messages.length === 0}
+                onClick={startReply}
+              />
+              <Button title={t('voiceAction')} icon={microphoneFilled} disabled initialFocusEligible={false} />
+              <Button title={t('photosAction')} icon={imageFilled} disabled initialFocusEligible={false} />
+              <Button
+                title={tails ? t('hideTails') : t('showTails')}
+                initialFocusEligible={false}
+                onClick={toggleTails}
+              />
+            </ButtonRail>
+          )}
         </div>
       </div>
     </Page>

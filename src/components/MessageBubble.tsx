@@ -1,19 +1,28 @@
 // One chat bubble; based on the UI Toolkit messaging example. Activating a
-// bubble picks it as the message to reply to.
+// bubble opens its context menu: four reactions and Reply.
 
+import arrowBigReplyFilled from '@wearables-ui-toolkit/icons/svg/arrowbigreply__filled.svg';
 import {
+  ButtonContextMenuItemView,
   Container,
+  ContextMenu,
   CornerRadius,
+  DismissReason,
+  EmojiContextMenuItemView,
   MaterialLibrary,
   TailShapeProvider,
   TextColor,
   TextStyle,
   TextView,
+  TooltipMode,
+  type ButtonHandle,
 } from '@wearables-ui-toolkit/mrbd';
-import {useMemo} from 'react';
+import {useLayoutEffect, useMemo, useRef, useState, type MouseEvent} from 'react';
 import type {ChatMessage} from '../evolution/parse';
 import {describeContent, formatBubbleTime, isMarker} from '../format';
 import {t} from '../i18n/strings';
+
+export const REACTIONS = ['👍', '❤️', '😂', '😭'] as const;
 
 type MessageBubbleProps = {
   message: ChatMessage;
@@ -21,9 +30,10 @@ type MessageBubbleProps = {
   showSender: boolean;
   /** Shows the time below the last bubble of a run. */
   endsRun: boolean;
-  /** This message is the one being replied to. */
-  selected: boolean;
-  onSelect: (message: ChatMessage) => void;
+  tails: boolean;
+  initialFocusEligible: boolean;
+  onReact: (message: ChatMessage, emoji: string) => void;
+  onReply: (message: ChatMessage) => void;
 };
 
 const OUTBOUND_TOKEN_NAMES = {
@@ -43,9 +53,27 @@ function resolveColorToken(token: string): string {
   return value;
 }
 
-export function MessageBubble({message, showSender, endsRun, selected, onSelect}: MessageBubbleProps) {
+// The bubble exposes the same focus handle shape as a toolkit Button trigger.
+type TriggerHandle = Pick<ButtonHandle, 'getElement'>;
+
+type ReactionItemProps = {emoji: string; onChoose: (emoji: string, event?: MouseEvent<HTMLElement>) => void};
+
+function ReactionItem({emoji, onChoose}: ReactionItemProps) {
+  const choose = (event?: MouseEvent<HTMLElement>) => onChoose(emoji, event);
+  return <EmojiContextMenuItemView emoji={emoji} ariaLabel={t('reactWith', {emoji})} onClick={choose} />;
+}
+
+export function MessageBubble({
+  message,
+  showSender,
+  endsRun,
+  tails,
+  initialFocusEligible,
+  onReact,
+  onReply,
+}: MessageBubbleProps) {
   const isOutgoing = message.fromMe;
-  const tailDirection = endsRun ? (isOutgoing ? 'right' : 'left') : 'none';
+  const tailDirection = tails && endsRun ? (isOutgoing ? 'right' : 'left') : 'none';
   const shapeProvider = useMemo(
     () => new TailShapeProvider(tailDirection, CornerRadius.MEDIUM),
     [tailDirection],
@@ -66,8 +94,57 @@ export function MessageBubble({message, showSender, endsRun, selected, onSelect}
   const text = describeContent(message.content);
   const time = formatBubbleTime(message.timestamp);
   const sender = isOutgoing ? t('you') : message.senderName;
-  const selectMessage = () => onSelect(message);
   const spoken = sender ? t('bubbleLabel', {sender, text, time}) : `${text}, ${time}`;
+
+  const [menuOpen, setMenuOpen] = useState(false);
+  // Public handle for the bubble that opens the menu, used to return focus to it.
+  const bubbleElementRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<TriggerHandle>({getElement: () => bubbleElementRef.current});
+
+  const shouldReturnFocusToTriggerRef = useRef(false);
+  useLayoutEffect(() => {
+    if (!menuOpen && shouldReturnFocusToTriggerRef.current) {
+      shouldReturnFocusToTriggerRef.current = false;
+      triggerRef.current?.getElement()?.focus({preventScroll: true});
+    }
+  }, [menuOpen]);
+
+  const toggleMenu = () => setMenuOpen(open => !open);
+  const dismissMenuToTrigger = (event?: MouseEvent<HTMLElement>) => {
+    // Menu items render in a portal owned by the bubble; keep the click from
+    // reaching the bubble and reopening the menu.
+    event?.stopPropagation();
+    shouldReturnFocusToTriggerRef.current = true;
+    setMenuOpen(false);
+  };
+  const chooseReaction = (emoji: string, event?: MouseEvent<HTMLElement>) => {
+    dismissMenuToTrigger(event);
+    onReact(message, emoji);
+  };
+  const chooseReply = (event?: MouseEvent<HTMLElement>) => {
+    event?.stopPropagation();
+    setMenuOpen(false);
+    onReply(message);
+  };
+
+  const menu = (
+    <ContextMenu
+      aria-label={t('messageActionsLabel', {message: text})}
+      onDismiss={reason => {
+        if (reason === DismissReason.BACK_BUTTON || reason === DismissReason.NAVIGATION) {
+          dismissMenuToTrigger();
+        }
+      }}>
+      {REACTIONS.map(emoji => (
+        <ReactionItem key={emoji} emoji={emoji} onChoose={chooseReaction} />
+      ))}
+      <ButtonContextMenuItemView
+        title={t('replyAction')}
+        icon={arrowBigReplyFilled}
+        onClick={chooseReply}
+      />
+    </ContextMenu>
+  );
 
   return (
     <div
@@ -83,14 +160,21 @@ export function MessageBubble({message, showSender, endsRun, selected, onSelect}
           </TextView>
         ) : null}
         <Container
-          aria-pressed={selected}
-          ariaLabel={t('quoteBubbleLabel', {message: spoken})}
+          ref={bubbleElementRef}
+          aria-haspopup="menu"
+          aria-expanded={menuOpen}
+          ariaLabel={t('messageActionsLabel', {message: spoken})}
           clickable
           focusable
-          initialFocusEligible={false}
+          initialFocusEligible={initialFocusEligible}
           material={material}
-          onClick={selectMessage}
-          shapeProvider={shapeProvider}>
+          onClick={toggleMenu}
+          shapeProvider={shapeProvider}
+          tooltipMode={menuOpen ? TooltipMode.FOCUSED : TooltipMode.NONE}
+          tooltipFocusable
+          tooltipHidesFocusState
+          tooltipContentDescription={t('messageActionsLabel', {message: text})}
+          tooltipContent={menu}>
           <div className="message-bubble-content">
             <TextView
               className="message-text"

@@ -5,6 +5,7 @@
 //   POST /chat/findMessages/{instance}       {where: {key: {remoteJid}}, page, offset}
 //   POST /chat/markMessageAsRead/{instance}  {readMessages: [{id, fromMe, remoteJid}]}
 //   POST /message/sendText/{instance}        {number, text, quoted?: {key, message}}
+//   POST /message/sendReaction/{instance}    {key: {id, remoteJid, fromMe, participant?}, reaction}
 // Every call sends the `apikey` header. The instance name is a path segment and
 // is URL-encoded with encodeURIComponent (a space must be %20, never `+`).
 
@@ -171,6 +172,11 @@ export class EvolutionClient {
       body.quoted = {key: quoted.key, message: {conversation: quoted.text}};
     }
     return this.post('message/sendText', body, signal);
+  }
+
+  /** Reacts to a message with an emoji (an empty string removes the reaction). */
+  sendReaction(key: MessageKeyRef & {participant?: string}, reaction: string, signal?: AbortSignal): Promise<unknown> {
+    return this.post('message/sendReaction', {key, reaction}, signal);
   }
 
   markMessagesAsRead(keys: MessageKeyRef[], signal?: AbortSignal): Promise<unknown> {

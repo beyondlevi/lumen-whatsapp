@@ -28,6 +28,8 @@ export type ChatMessage = {
   fromMe: boolean;
   /** Sender display name for incoming messages (group participants). */
   senderName: string | null;
+  /** Sender JID of an incoming group message. */
+  participant?: string;
   /** Epoch milliseconds. */
   timestamp: number;
   content: MessageContent;
@@ -241,6 +243,7 @@ export function parseMessage(value: unknown, contacts?: ContactNames): ChatMessa
     remoteJid,
     fromMe,
     senderName,
+    participant: participant ?? undefined,
     timestamp: toMillis(record.messageTimestamp) ?? Date.now(),
     content,
     pending: record.status === 'PENDING' ? true : undefined,

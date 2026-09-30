@@ -23,7 +23,7 @@ export function chatPath(jid: string): string {
 
 export function ChatListPage() {
   const navigate = useNavigate();
-  const {phase, chats, offline, isUnread, listOrder} = useWhatsApp();
+  const {phase, chats, offline, syncing, isUnread, listOrder} = useWhatsApp();
 
   const rows = useReturnOrder(chats, listOrder);
 
@@ -36,8 +36,9 @@ export function ChatListPage() {
 
   return (
     <Page
-      headerText={t('chatsHeader')}
-      headerMetadata={offline ? t('offlineMeta') : undefined}
+      headerText={syncing ? t('loadingHeader') : t('chatsHeader')}
+      headerIsLoading={syncing}
+      headerMetadata={offline && !syncing ? t('offlineMeta') : undefined}
       enableSystemBarInset={false}>
       <VerticalList insetForHeader ariaLabel={t('chatListLabel')}>
         {rows.map(chat => {

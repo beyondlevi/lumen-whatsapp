@@ -53,16 +53,9 @@ function SetupPage({missing}: {missing: ConfigField[]}) {
 
 function ConnectingPage() {
   return (
-    <Page headerText={t('connectingHeader')} enableSystemBarInset={false}>
-      <ScrollView insetForHeader tabIndex={0} ariaLabel={t('connectingLabel')}>
-        <div className="content-inset" role="status">
-          <TextView as="p" textStyle={TextStyle.BODY2_EMPHASIZED}>
-            {t('connectingTitle')}
-          </TextView>
-          <TextView as="p" textStyle={TextStyle.BODY2}>
-            {t('connectingBody')}
-          </TextView>
-        </div>
+    <Page headerText={t('loadingHeader')} headerIsLoading enableSystemBarInset={false}>
+      <ScrollView insetForHeader ariaLabel={t('connectingLabel')}>
+        <div className="content-inset" role="status" aria-label={t('connectingLabel')} />
       </ScrollView>
     </Page>
   );

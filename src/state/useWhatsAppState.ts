@@ -13,6 +13,7 @@ import {
 } from '../evolution/parse';
 import {describeContent} from '../format';
 import {t} from '../i18n/strings';
+import {cacheAccount, loadChatCache, saveChatCache} from './chatCache';
 import {loadReadMarks, saveReadMarks, type ReadMarks} from './readMarks';
 import {useLumenConfig} from './useLumenConfig';
 
@@ -36,13 +37,16 @@ export type Phase =
   | {kind: 'error'; error: EvolutionError}
   | {kind: 'ready'};
 
-export type Thread = {loaded: boolean; messages: ChatMessage[]};
+/** `loaded`: messages to show (maybe from the cache); `synced`: refreshed from the server this session. */
+export type Thread = {loaded: boolean; synced: boolean; messages: ChatMessage[]};
 
 export type WhatsAppState = {
   phase: Phase;
   instance: string | null;
   chats: Chat[];
   offline: boolean;
+  /** Cached data is on screen while the first refresh runs. */
+  syncing: boolean;
   isUnread(chat: Chat): boolean;
   thread(jid: string): Thread;
   chatFor(jid: string): Chat | undefined;
@@ -53,11 +57,13 @@ export type WhatsAppState = {
   openThread(jid: string): () => void;
   /** Sends a text, optionally as a reply to `quoted`. */
   sendText(jid: string, text: string, quoted?: ChatMessage | null): Promise<void>;
+  /** Reacts to a message with an emoji. */
+  sendReaction(message: ChatMessage, emoji: string): Promise<void>;
   /** Chat order last shown by the list; kept across the list route's unmounts. */
   listOrder: {current: string[] | null};
 };
 
-const EMPTY_THREAD: Thread = {loaded: false, messages: []};
+const EMPTY_THREAD: Thread = {loaded: false, synced: false, messages: []};
 
 function toError(error: unknown): EvolutionError {
   return error instanceof EvolutionError
@@ -81,6 +87,7 @@ export function useWhatsAppState(): WhatsAppState {
   const [chats, setChats] = useState<Chat[]>([]);
   const [threads, setThreads] = useState<Record<string, Thread>>({});
   const [offline, setOffline] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const [activeJid, setActiveJid] = useState<string | null>(null);
   const [readMarks, setReadMarks] = useState<ReadMarks>(loadReadMarks);
 
@@ -197,7 +204,11 @@ export function useWhatsAppState(): WhatsAppState {
       }
       setThreads(previous => ({
         ...previous,
-        [jid]: {loaded: true, messages: mergeThread(messages, previous[jid]?.messages ?? [])},
+        [jid]: {
+          loaded: true,
+          synced: true,
+          messages: mergeThread(messages, previous[jid]?.messages ?? []),
+        },
       }));
       // Keep the list preview current without waiting for the next findChats.
       const newest = messages[messages.length - 1];
@@ -219,7 +230,7 @@ export function useWhatsAppState(): WhatsAppState {
   );
 
   // Initial load. Network failures retry every 3 s for up to 30 s while the
-  // screen says "Connecting…", because the phone's internet may still be coming up.
+  // header shows the loading spinner, because the phone's internet may still be coming up.
   useEffect(() => {
     if (config.status === 'loading') {
       return;
@@ -241,14 +252,25 @@ export function useWhatsAppState(): WhatsAppState {
     markedReadRef.current = new Set();
     offlineRef.current = false;
     setOffline(false);
-    setChats([]);
-    setThreads({});
-    setPhase({kind: 'connecting'});
+    // Show the last known chats right away; the header spins until the refresh lands.
+    const cached = loadChatCache(cacheAccount(config.config));
+    setChats(cached?.chats ?? []);
+    setThreads(
+      Object.fromEntries(
+        Object.entries(cached?.threads ?? {}).map(([jid, messages]) => [
+          jid,
+          {loaded: true, synced: false, messages},
+        ]),
+      ),
+    );
+    setSyncing(true);
+    setPhase(cached ? {kind: 'ready'} : {kind: 'connecting'});
 
     const attempt = async () => {
       try {
         await refreshChats(client, controller.signal);
         if (!controller.signal.aborted) {
+          setSyncing(false);
           setPhase({kind: 'ready'});
         }
       } catch (error) {
@@ -260,6 +282,12 @@ export function useWhatsAppState(): WhatsAppState {
           timer = setTimeout(attempt, CONNECT_RETRY_MS);
           return;
         }
+        setSyncing(false);
+        if (cached && failure.kind !== 'auth' && failure.kind !== 'instance') {
+          // Keep the cached chats on screen; polling keeps retrying.
+          setOfflineState(true);
+          return;
+        }
         setPhase({kind: 'error', error: failure});
       }
     };
@@ -269,11 +297,11 @@ export function useWhatsAppState(): WhatsAppState {
       controller.abort();
       clearTimeout(timer);
     };
-  }, [client, config, connectAttempt, refreshChats]);
+  }, [client, config, connectAttempt, refreshChats, setOfflineState]);
 
   // Polling while ready: the open thread every 3 s, the chat list every 5 s
   // (every ~15 s while a thread is open). Paused while the page is hidden.
-  const ready = phase.kind === 'ready';
+  const ready = phase.kind === 'ready' && !syncing;
   useEffect(() => {
     if (!ready || client == null) {
       return;
@@ -394,7 +422,7 @@ export function useWhatsAppState(): WhatsAppState {
       };
       const message: ChatMessage = {...sent, remoteJid: jid, pending: true};
       setThreads(previous => {
-        const current = previous[jid] ?? {loaded: true, messages: []};
+        const current = previous[jid] ?? {loaded: true, synced: true, messages: []};
         return {...previous, [jid]: {...current, messages: mergeThread(current.messages, [message])}};
       });
       setChats(previous => {
@@ -408,6 +436,42 @@ export function useWhatsAppState(): WhatsAppState {
     },
     [client],
   );
+
+  const sendReaction = useCallback(
+    async (message: ChatMessage, emoji: string) => {
+      if (client == null) {
+        throw new EvolutionError('network', null, 'Not connected');
+      }
+      await client.sendReaction(
+        {
+          id: message.id,
+          fromMe: message.fromMe,
+          remoteJid: message.remoteJid,
+          ...(message.participant ? {participant: message.participant} : {}),
+        },
+        emoji,
+      );
+    },
+    [client],
+  );
+
+  // Persist the list and recent messages for an instant start next time.
+  const cacheAccountKey = config.status === 'ready' ? cacheAccount(config.config) : null;
+  useEffect(() => {
+    if (cacheAccountKey == null || phase.kind !== 'ready' || syncing || chats.length === 0) {
+      return;
+    }
+    const timer = setTimeout(() => {
+      const messages: Record<string, ChatMessage[]> = {};
+      for (const [jid, thread] of Object.entries(threads)) {
+        if (thread.loaded) {
+          messages[jid] = thread.messages;
+        }
+      }
+      saveChatCache(cacheAccountKey, chats, messages);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [cacheAccountKey, chats, phase.kind, syncing, threads]);
 
   const isUnread = useCallback(
     (chat: Chat) =>
@@ -423,6 +487,7 @@ export function useWhatsAppState(): WhatsAppState {
       instance: config.status === 'ready' ? config.config.instance : null,
       chats,
       offline,
+      syncing,
       isUnread,
       thread: jid => threads[jid] ?? EMPTY_THREAD,
       chatFor: jid => chats.find(chat => chat.jid === jid),
@@ -436,8 +501,9 @@ export function useWhatsAppState(): WhatsAppState {
       },
       openThread,
       sendText,
+      sendReaction,
       listOrder: listOrderRef,
     }),
-    [chats, config, isUnread, offline, openThread, phase, reloadConfig, sendText, threads],
+    [chats, config, isUnread, offline, openThread, phase, reloadConfig, sendReaction, sendText, syncing, threads],
   );
 }
