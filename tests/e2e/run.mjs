@@ -166,30 +166,47 @@ async function mainFlow(browser, label, appUrl = APP) {
     assert.match(await activeLabel(page), /^div\|Ana Souza, /, 'first chat has initial focus');
     await page.screenshot({path: path.join(outDir, `${label}-1-list.png`)});
 
-    // Open the conversation with Enter
+    // Open the conversation with Enter: actions rail, no reply field yet
     await press(page, 'Enter');
     await page.waitForURL(`**/chat/${encodeURIComponent(ANA)}`);
     await waitForText(page, 'Levo o projetor');
-    for (const text of ['Audio', 'Combinado, até amanhã', 'Reaction 👍', 'Oi! Tudo certo para amanhã?']) {
+    for (const text of ['Audio', 'Combinado, até amanhã', 'Reaction 👍', 'Oi! Tudo certo para amanhã?', 'Hide tails']) {
       await waitForText(page, text);
     }
     await page.waitForTimeout(600);
-    assert.equal(await activeLabel(page), 'textarea|Reply to Ana Souza', 'reply field has initial focus');
+    assert.equal(await page.locator('textarea').count(), 0, 'reply field only appears after Reply');
+    assert.notEqual(await activeLabel(page), '(body)', 'something visible has focus on entry');
     const anaAfterOpen = (await mockChats()).find(chat => chat.remoteJid === ANA);
     assert.equal(anaAfterOpen.unreadCount, 0, 'opening the chat marks its messages as read');
     await page.screenshot({path: path.join(outDir, `${label}-2-thread.png`)});
 
-    // Reply by dictation, sent with Enter in the field
+    // Reply → field → dictation → Enter sends and closes the field
+    await pressUntil(page, 'ArrowDown', /^div\|Reply$/);
+    await press(page, 'Enter');
+    assert.equal(await activeLabel(page), 'textarea|Reply to Ana Souza', 'Reply opens the focused field');
     await dictate(page, 'Pode deixar, obrigado');
     await press(page, 'Enter');
     await waitForText(page, 'Message sent');
     await waitForText(page, 'Pode deixar, obrigado');
     let sent = await mockSent();
     assert.deepEqual(sent.at(-1), {number: ANA, text: 'Pode deixar, obrigado', quoted: null});
-    assert.equal(await page.inputValue('textarea'), '', 'field is cleared after sending');
+    await page.waitForTimeout(500);
+    assert.equal(await page.locator('textarea').count(), 0, 'field closes after sending');
+    assert.equal(await activeLabel(page), 'div|Reply', 'focus returns to Reply');
 
-    // Quoted reply: pick a bubble with Enter, dictate, send with the Send button
+    // Reply, then Back closes only the field
+    await press(page, 'Enter');
+    assert.equal(await activeLabel(page), 'textarea|Reply to Ana Souza');
+    await press(page, 'Escape');
+    assert.equal(await page.locator('textarea').count(), 0);
+    assert.match(page.url(), /\/chat\//, 'Back from the field stays in the conversation');
+
+    // Bubble menu → Reply: quoted reply, sent with the Send button
     await pressUntil(page, 'ArrowUp', /Oi! Tudo certo para amanhã\?/);
+    await press(page, 'Enter');
+    assert.equal(await activeLabel(page), 'div|React with 👍', 'the menu opens on the first reaction');
+    await page.screenshot({path: path.join(outDir, `${label}-3-menu.png`)});
+    await pressUntil(page, 'ArrowRight', /^div\|Reply$/);
     await press(page, 'Enter');
     assert.equal(await activeLabel(page), 'textarea|Reply to Ana Souza');
     await page.waitForFunction(
@@ -200,7 +217,7 @@ async function mainFlow(browser, label, appUrl = APP) {
     await dictate(page, 'Sim, tudo certo');
     await press(page, 'ArrowRight');
     assert.match(await activeLabel(page), /Send/, 'ArrowRight reaches the Send action');
-    await page.screenshot({path: path.join(outDir, `${label}-3-quote.png`)});
+    await page.screenshot({path: path.join(outDir, `${label}-4-quote.png`)});
     await press(page, 'Enter');
     await waitForText(page, 'Sim, tudo certo');
     sent = await mockSent();
@@ -208,10 +225,23 @@ async function mainFlow(browser, label, appUrl = APP) {
     assert.equal(sent.at(-1).quoted.message.conversation, 'Oi! Tudo certo para amanhã?');
     assert.equal(sent.at(-1).quoted.key.remoteJid, ANA);
 
+    // Bubble menu → reaction
+    await pressUntil(page, 'ArrowUp', /Levo o projetor/);
+    await press(page, 'Enter');
+    await pressUntil(page, 'ArrowRight', /React with ❤️/);
+    await press(page, 'Enter');
+    await waitForText(page, 'Reacted ❤️');
+    const reactions = await fetch(`${MOCK}/__mock/reactions`).then(response => response.json());
+    assert.equal(reactions.at(-1).reaction, '❤️');
+    assert.equal(reactions.at(-1).key.remoteJid, ANA);
+    assert.equal(reactions.at(-1).key.fromMe, false);
+    await page.waitForTimeout(300);
+    assert.match(await activeLabel(page), /Levo o projetor/, 'focus returns to the bubble');
+
     // New incoming message shows up by polling
     await mockPost('/__mock/incoming', {remoteJid: ANA, text: 'Chegando em 5 min', pushName: 'Ana Souza'});
     await waitForText(page, 'Chegando em 5 min', 8000);
-    await page.screenshot({path: path.join(outDir, `${label}-4-thread-new.png`)});
+    await page.screenshot({path: path.join(outDir, `${label}-5-thread-new.png`)});
 
     // Escape returns to the list with focus on the same chat
     await press(page, 'Escape');
@@ -220,7 +250,7 @@ async function mainFlow(browser, label, appUrl = APP) {
     await page.waitForTimeout(600);
     assert.match(await activeLabel(page), /^div\|Ana Souza, /, 'focus returns to the opened chat');
     const anaRow = (await rowLabels(page))[0];
-    assert.match(anaRow, /^Ana Souza, Chegando em 5 min/);
+    assert.match(anaRow, /^Ana Souza, (Chegando em 5 min|You: Reaction)/);
 
     // Another chat receives a message while the list is open
     await mockPost('/__mock/incoming', {remoteJid: CARLA, text: 'Cheguei', pushName: 'Carla Dias'});
@@ -232,16 +262,19 @@ async function mainFlow(browser, label, appUrl = APP) {
     const unreadNow = await page.$$eval('[role="img"][aria-label$="Unread Status"]', e => e.map(x => x.getAttribute('aria-label')));
     assert.ok(unreadNow.includes('Carla Dias, Unread Status'), 'new message is highlighted as unread');
     assert.ok(!unreadNow.includes('Ana Souza, Unread Status'), 'read chat is not highlighted');
-    await page.screenshot({path: path.join(outDir, `${label}-5-list-new.png`)});
+    await page.screenshot({path: path.join(outDir, `${label}-6-list-new.png`)});
 
     // Replying to a chat further down moves it to the top; Back still lands on it
     await pressUntil(page, 'ArrowDown', /^div\|Diego Alves, /);
     await press(page, 'Enter');
     await waitForText(page, 'Document');
     await page.waitForTimeout(600);
+    await pressUntil(page, 'ArrowDown', /^div\|Reply$/);
+    await press(page, 'Enter');
     await dictate(page, 'Recebi, obrigado');
     await press(page, 'Enter');
     await waitForText(page, 'Message sent');
+    await page.waitForTimeout(400);
     await press(page, 'Escape');
     await page.waitForURL(`${appUrl}/`);
     await page.waitForTimeout(800);
@@ -281,7 +314,7 @@ async function run() {
     for (const name of browsers) {
       const browser = await (name === 'firefox' ? firefox : chromium).launch();
       try {
-        await test(`[${name}] list, thread, dictated reply, quoted reply, polling, Back`, () => mainFlow(browser, name));
+        await test(`[${name}] list, thread actions, Reply field, bubble menu (reaction + quoted reply), polling, Back`, () => mainFlow(browser, name));
 
         await test(`[${name}] setup screen without configuration`, async () => {
           const {context, page, problems} = await newPage(browser);
@@ -345,13 +378,13 @@ async function run() {
       await errorCase('404 instance not found', {'evolution.instance': 'Other Phone'}, ['Instance not found', '“Other Phone”', 'HTTP 404']);
       await errorCase('invalid server URL', {'evolution.url': 'evo.example.com'}, ['Invalid server URL']);
 
-      await test('[chromium] Connecting… while the internet comes up, then the list', async () => {
+      await test('[chromium] header spinner while the internet comes up, then the list', async () => {
         await mockPost('/__mock/reset', {downForMs: 7000});
         const {context, page} = await newPage(browser);
         try {
           const started = Date.now();
           await page.goto(`${APP}/?${configQuery()}`);
-          await waitForText(page, 'Connecting…', 3000);
+          await waitForText(page, 'Loading…', 3000);
           await page.screenshot({path: path.join(outDir, 'connecting.png')});
           await waitForText(page, 'Ana Souza', 15000);
           assert.ok(Date.now() - started >= 6000, 'list appears only after the mock is reachable');
@@ -365,9 +398,9 @@ async function run() {
           const {context, page} = await newPage(browser);
           try {
             await page.goto(`${APP}/?${configQuery({'evolution.url': 'http://127.0.0.1:8099'})}`);
-            await waitForText(page, 'Connecting…', 3000);
+            await waitForText(page, 'Loading…', 3000);
             await page.waitForTimeout(20000);
-            assert.equal(await page.getByText('Connecting…').count(), 1, 'still retrying at 20 s');
+            assert.equal(await page.getByText('Loading…').count(), 1, 'still retrying at 20 s');
             await waitForText(page, "Can't reach the server", 20000);
             await page.screenshot({path: path.join(outDir, 'error-network.png')});
           } finally {
@@ -412,6 +445,32 @@ async function run() {
           await waitForText(page, 'Connect WhatsApp');
           await waitForText(page, 'Instance and API key');
           assert.deepEqual(problems, []);
+        } finally {
+          await context.close();
+        }
+      });
+
+      await test('[chromium] cached chats show at once on the next launch, header spins until refreshed', async () => {
+        await mockPost('/__mock/reset');
+        const {context, page} = await newPage(browser);
+        try {
+          await page.goto(`${APP}/?${configQuery()}`);
+          await waitForText(page, 'Carla Dias');
+          await page.waitForTimeout(1200);
+          await mockPost('/__mock/reset', {downForMs: 6000});
+          const started = Date.now();
+          await page.reload();
+          await waitForText(page, 'Ana Souza', 1500);
+          assert.ok(Date.now() - started < 1500, 'list comes from the cache');
+          await waitForText(page, 'Loading…', 1000);
+          assert.equal(await page.getByText('Chats', {exact: true}).count(), 0, 'header shows the spinner');
+          await page.screenshot({path: path.join(outDir, 'cached-launch.png')});
+          await waitForText(page, 'Chats', 15000);
+          assert.equal(await page.getByText('Loading…').count(), 0);
+          assert.ok(
+            !(await page.evaluate(() => localStorage.getItem('lumen-whatsapp.chat-cache.v1') ?? '')).includes('mock-api-key'),
+            'the API key is not in the chat cache',
+          );
         } finally {
           await context.close();
         }

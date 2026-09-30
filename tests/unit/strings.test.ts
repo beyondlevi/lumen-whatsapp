@@ -20,7 +20,7 @@ describe('locale', () => {
 
   it('keeps header titles and metadata within two words', () => {
     for (const target of ['en', 'pt'] as const) {
-      for (const key of ['chatsHeader', 'setupHeader', 'connectingHeader', 'errorHeader', 'offlineMeta'] as const) {
+      for (const key of ['chatsHeader', 'setupHeader', 'loadingHeader', 'errorHeader', 'offlineMeta'] as const) {
         expect(translate(target, key).split(/\s+/).length).toBeLessThanOrEqual(2);
       }
     }

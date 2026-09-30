@@ -79,6 +79,8 @@ try {
   await press('Enter');
   await waitText('Me manda o endereço?');
   await page.waitForTimeout(800);
+  await pressUntil('ArrowDown', /^div\|Reply$/);
+  await press('Enter');
   assert.equal(await active(), 'textarea|Reply to Carla Dias');
 
   await page.evaluate(() => {
@@ -94,6 +96,18 @@ try {
   assert.equal(sent.at(-1).text, 'Rua das Flores 10');
   await page.screenshot({path: path.join(outDir, 'chromium95-thread.png')});
 
+  // Bubble menu: reaction
+  await page.waitForTimeout(600);
+  await pressUntil('ArrowUp', /Me manda o endereço\?/);
+  await press('Enter');
+  assert.equal(await active(), 'div|React with 👍');
+  await page.screenshot({path: path.join(outDir, 'chromium95-menu.png')});
+  await pressUntil('ArrowRight', /React with 😂/);
+  await press('Enter');
+  await waitText('Reacted 😂');
+  const reactions = await fetch('http://127.0.0.1:8089/__mock/reactions').then(response => response.json());
+  assert.equal(reactions.at(-1).reaction, '😂');
+
   await press('Escape');
   await waitText('Chats');
   assert.equal(new URL(page.url()).pathname, '/');
@@ -101,12 +115,12 @@ try {
   assert.match(await active(), /Carla Dias/, 'focus returns to the chat that was open');
   // The next refresh moves Carla (latest message) to the top; focus moves with it.
   await page.waitForFunction(
-    () => document.querySelector('[role="button"][aria-label]')?.getAttribute('aria-label')?.startsWith('Carla Dias, You: Rua'),
+    () => document.querySelector('[role="button"][aria-label]')?.getAttribute('aria-label')?.startsWith('Carla Dias, You:'),
     {timeout: 8000},
   );
   assert.match(await active(), /Carla Dias/);
   assert.deepEqual(problems, []);
-  console.log('ok   [chromium 95] offline package: list, thread, dictated reply, Back');
+  console.log('ok   [chromium 95] offline package: list, Reply field, dictated reply, bubble menu reaction, Back');
 } catch (error) {
   console.log(`FAIL [chromium 95] ${error.message}\n${problems.join('\n')}`);
   process.exitCode = 1;

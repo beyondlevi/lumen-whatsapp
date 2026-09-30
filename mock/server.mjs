@@ -12,6 +12,7 @@
 //   POST /__mock/reset              {downForMs?}  reseed; refuse connections for downForMs
 //   POST /__mock/incoming           {remoteJid, text, pushName?}  deliver a new message
 //   GET  /__mock/sent               messages sent through sendText
+//   GET  /__mock/reactions          reactions sent through sendReaction
 import http from 'node:http';
 
 export const MOCK_INSTANCE = 'Lumen Test';
@@ -91,7 +92,7 @@ function seed() {
   ];
   // Chat.name (returned as pushName by findChats on v2.3.x): null for Carla and Diego.
   const chatNames = {[ana]: 'Ana Souza', [family]: 'Família'};
-  return {messages, contacts, chatNames, sent: []};
+  return {messages, contacts, chatNames, sent: [], reactions: []};
 }
 
 function reset(downForMs = 0) {
@@ -230,6 +231,9 @@ async function handle(req, res) {
       state.messages.push(message);
       return send(res, 200, {ok: true, id: message.key.id}, origin);
     }
+    if (url.pathname === '/__mock/reactions' && req.method === 'GET') {
+      return send(res, 200, state.reactions, origin);
+    }
     if (url.pathname === '/__mock/sent' && req.method === 'GET') {
       return send(res, 200, state.sent, origin);
     }
@@ -286,6 +290,18 @@ async function handle(req, res) {
       state.sent.push({number: body.number, text: body.text, quoted: body.quoted ?? null});
       const {id, MessageUpdate, _unread, ...response} = message;
       return send(res, 201, {...response, status: 'PENDING', contextInfo: {mentionedJid: [], groupMentions: []}}, origin);
+    }
+    case 'POST message/sendReaction': {
+      const target = state.messages.find(message => message.key.id === body?.key?.id);
+      if (!target || typeof body.reaction !== 'string') {
+        return send(res, 400, errorBody(400, 'Bad Request', ['Message not found']), origin);
+      }
+      state.reactions.push({key: body.key, reaction: body.reaction});
+      const reaction = record({remoteJid: target.key.remoteJid, fromMe: true, secondsAgo: 0,
+        messageType: 'reactionMessage', message: {reactionMessage: {key: body.key, text: body.reaction}}});
+      state.messages.push(reaction);
+      const {id, MessageUpdate, _unread, ...response} = reaction;
+      return send(res, 201, {...response, status: 'PENDING'}, origin);
     }
     case 'GET instance/connectionState':
       return send(res, 200, {instance: {instanceName: MOCK_INSTANCE, state: 'open'}}, origin);

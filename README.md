@@ -6,12 +6,20 @@ backed by an [Evolution API v2](https://github.com/EvolutionAPI/evolution-api) s
 toolkit's messaging example (`examples/messaging`).
 
 - **Chats**: name, preview, and time for the 40 most recent chats. Unread chats have an unread dot on the
-  avatar and an accent-colored time.
+  avatar and an accent-colored time. The last list and the 30 most recent messages of up to 20 chats are
+  cached in localStorage (never the API key). On launch the cached list shows at once, and the header
+  shows a spinner with “Loading…” until the first refresh arrives.
 - **Conversation**: the 30 most recent messages. Voice notes, photos, videos, stickers, documents,
   locations, contacts, polls, and reactions show only a marker (“Audio”, “Photo”, “Reaction 👍”…).
-- **Reply**: a normal `<textarea>` (the toolkit's `InputTextView`). On the glasses, Enter on the field
-  opens the platform's dictation composer, and the text arrives through `input`/`change` events. Right
-  then moves to Send. Enter on a message bubble quotes that message in the reply.
+- **Conversation actions**: a bottom rail with Reply, Voice and Photos (disabled: web apps have no
+  microphone or media access), and Hide/Show tails, as in the toolkit's messaging example.
+- **Reply**: the text field (the toolkit's `InputTextView`, a real `<textarea>`) appears only after Reply,
+  as its own history entry, so Back closes it and focus returns to Reply. On the glasses, Enter on the
+  field opens the platform's dictation composer, and the text arrives through `input`/`change` events.
+  Right then moves to Send. After sending, the field closes.
+- **Message menu**: Enter on a bubble opens a toolkit `ContextMenu` anchored to it, with four reactions
+  (👍 ❤️ 😂 😭) and Reply, which opens the field quoting that message. Back closes the menu and returns
+  focus to the bubble.
 
   `InputTextView` handles Enter in its own `keydown` handler, calling `preventDefault()` and
   `stopPropagation()`. The host must therefore open the composer the way the MRBD host does: on
@@ -30,11 +38,14 @@ The app uses only arrow keys, Enter, and Escape (the Neural Band / Rokid gesture
 | Chats | Up / Down | Move between chats |
 | Chats | Enter | Open the chat |
 | Chats | Escape | Not handled by the app, so the platform closes it |
-| Conversation | (on open) | Focus is on the reply field |
-| Conversation | Up / Down | Move between the field and the message bubbles (scrolls history) |
-| Conversation | Enter on the field | On the glasses: opens the platform's dictation composer. In a desktop browser: sends the text (UI Toolkit `InputTextView` behavior) |
-| Conversation | Right from the field, then Enter | Send (the path to use on the glasses after dictating) |
-| Conversation | Enter on a bubble | Reply quoting that message (Enter again cancels) |
+| Conversation | Up / Down | Move between the message bubbles (scrolls history) and the action rail |
+| Conversation | Enter on Reply | Opens the reply field, focused |
+| Reply field | Enter | On the glasses: opens the platform's dictation composer. In a desktop browser: sends the text (UI Toolkit `InputTextView` behavior) |
+| Reply field | Right, then Enter | Send (the path to use on the glasses after dictating); the field closes |
+| Reply field | Escape | Closes the field, back to Reply |
+| Conversation | Enter on a bubble | Opens the message menu |
+| Message menu | Left / Right, Enter | Pick 👍 ❤️ 😂 😭 (sends the reaction) or Reply (quoted reply) |
+| Message menu | Escape | Closes the menu, back to the bubble |
 | Conversation | Escape | Back to the chat list, with the same chat focused |
 | Error screens | Enter on “Try again” | Reconnects |
 | Setup screen | Enter on “Check again” | Reads the configuration again |
@@ -86,6 +97,7 @@ The instance name is a path segment encoded with `encodeURIComponent`, so a spac
 | `POST /chat/findContacts/{instance}` | `{"where": {}}` | array of `{remoteJid, pushName}`; requested only when a chat has no name |
 | `POST /chat/findMessages/{instance}` | `{"where": {"key": {"remoteJid": "<jid>"}}, "page": 1, "offset": 30}` | `{messages: {total, pages, currentPage, records: [...]}}`, newest first |
 | `POST /message/sendText/{instance}` | `{"number": "<jid>", "text": "…"}`, plus `"quoted": {"key": {"id", "fromMe", "remoteJid"}, "message": {"conversation": "…"}}` when replying to a message | 201, the sent message (`key`, `messageTimestamp`, `status: "PENDING"`) |
+| `POST /message/sendReaction/{instance}` | `{"key": {"id", "fromMe", "remoteJid", "participant"?}, "reaction": "👍"}` (`participant` for group messages) | 201; failures show a Toast |
 | `POST /chat/markMessageAsRead/{instance}` | `{"readMessages": [{"id", "fromMe": false, "remoteJid"}]}` (up to 30) | 201; failures are ignored |
 
 `status@broadcast`, `@broadcast` and `@newsletter` chats are hidden.
@@ -100,8 +112,9 @@ The instance name is a path segment encoded with `encodeURIComponent`, so a spac
 | Other statuses, e.g. 503 `LICENSE_REQUIRED` on 2.4 | “Server error” |
 
 The phone's internet can take 5–15 s to come up after launch. On the first load, network failures are
-retried every 3 s for up to 30 s while the app shows **Connecting…**. Only after that does it show the
-network error.
+retried every 3 s for up to 30 s while the header shows the **Loading…** spinner, over the cached list
+when there is one. Only after that does it show the network error; with a cached list, the list stays and
+the header shows **Offline** instead.
 
 After the first load, a failed poll keeps the data on screen, shows “Connection lost. Retrying…”, and marks
 the header **Offline** until a poll succeeds.
@@ -171,7 +184,9 @@ calls to the mock. It covers:
 - polling, both in the conversation and in the list;
 - Back restoring focus;
 - Escape on the list left to the platform;
-- the Setup, Connecting…, network, 401, 404 and invalid-URL screens;
+- the Setup, Loading…, network, 401, 404 and invalid-URL screens;
+- the cached list on relaunch, with the header spinner until the refresh;
+- the conversation rail, the Reply field and Back closing it, and the message menu (reaction and quoted reply);
 - the `window.lumen.config` contract (`get` and `onChange`);
 - pt-PT;
 - the unzipped `.mrbd.zip` with every other origin blocked.
