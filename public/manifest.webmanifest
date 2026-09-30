@@ -1,0 +1,22 @@
+{
+  "id": "cloud.bynd.lumen.whatsapp",
+  "name": "WhatsApp for Lumen",
+  "short_name": "WhatsApp",
+  "description": "Read and answer WhatsApp chats through an Evolution API server.",
+  "lang": "en",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#000000",
+  "theme_color": "#000000",
+  "icons": [
+    {"src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any monochrome"},
+    {"src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any monochrome"}
+  ],
+  "lumen_config": [
+    {"key": "evolution.url", "label": "Evolution server URL", "type": "url"},
+    {"key": "evolution.instance", "label": "Instance", "type": "text"},
+    {"key": "evolution.apiKey", "label": "API key", "type": "secret"}
+  ],
+  "lumen_internet": true
+}
