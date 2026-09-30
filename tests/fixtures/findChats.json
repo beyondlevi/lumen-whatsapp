@@ -1,0 +1,106 @@
+[
+  {
+    "id": "cmb1x2y3z0001abcd1234efgh",
+    "remoteJid": "5511999990001@s.whatsapp.net",
+    "pushName": "Ana Souza",
+    "profilePicUrl": "https://pps.whatsapp.net/v/t61.24694-24/000000000_000000000000000_0000000000000000000_n.jpg?oh=00_AbC&oe=68F00000",
+    "updatedAt": "2026-09-29T13:05:12.000Z",
+    "windowStart": "2026-09-01T10:00:00.000Z",
+    "windowExpires": "2026-09-02T10:00:00.000Z",
+    "windowActive": false,
+    "lastMessage": {
+      "id": "cmb1x9k2l0003abcd5678ijkl",
+      "key": {
+        "id": "3EB0A1B2C3D4E5F6A7B8C9",
+        "fromMe": false,
+        "remoteJid": "5511999990001@s.whatsapp.net"
+      },
+      "pushName": "Ana Souza",
+      "participant": null,
+      "messageType": "conversation",
+      "message": {
+        "conversation": "Oi! Tudo certo para amanhã?",
+        "messageContextInfo": {
+          "deviceListMetadataVersion": 2
+        }
+      },
+      "contextInfo": null,
+      "source": "android",
+      "messageTimestamp": 1759151112,
+      "instanceId": "a1b2c3d4-0000-4000-8000-000000000001",
+      "sessionId": null,
+      "status": "DELIVERY_ACK"
+    },
+    "unreadCount": 2,
+    "isSaved": true
+  },
+  {
+    "id": null,
+    "remoteJid": "120363000000000001@g.us",
+    "pushName": "Família",
+    "profilePicUrl": null,
+    "updatedAt": "2026-09-29T12:40:03.000Z",
+    "windowStart": "2026-08-15T09:00:00.000Z",
+    "windowExpires": "2026-08-16T09:00:00.000Z",
+    "windowActive": false,
+    "lastMessage": {
+      "id": "cmb1xa0000005abcd0000mnop",
+      "key": {
+        "id": "3A0000000000000000A1",
+        "fromMe": false,
+        "remoteJid": "120363000000000001@g.us",
+        "participant": "5511999990002@s.whatsapp.net"
+      },
+      "pushName": "Bruno Lima",
+      "participant": null,
+      "messageType": "imageMessage",
+      "message": {
+        "imageMessage": {
+          "caption": "Olha isso"
+        }
+      },
+      "contextInfo": null,
+      "source": "ios",
+      "messageTimestamp": 1759149603,
+      "instanceId": "a1b2c3d4-0000-4000-8000-000000000001",
+      "sessionId": null,
+      "status": "DELIVERY_ACK"
+    },
+    "unreadCount": 0,
+    "isSaved": false
+  },
+  {
+    "id": "cmb1xb1110007abcd1111qrst",
+    "remoteJid": "5511999990003@s.whatsapp.net",
+    "pushName": "Carla Dias",
+    "profilePicUrl": null,
+    "updatedAt": "2026-09-28T21:10:00.000Z",
+    "windowStart": null,
+    "windowExpires": null,
+    "windowActive": false,
+    "lastMessage": {
+      "id": "cmb1xb2220009abcd2222uvwx",
+      "key": {
+        "id": "3EB0FFEEDDCCBBAA998877",
+        "fromMe": true,
+        "remoteJid": "5511999990003@s.whatsapp.net"
+      },
+      "pushName": "Você",
+      "participant": null,
+      "messageType": "audioMessage",
+      "message": {
+        "audioMessage": {
+          "seconds": 7
+        }
+      },
+      "contextInfo": null,
+      "source": "web",
+      "messageTimestamp": 1759093800,
+      "instanceId": "a1b2c3d4-0000-4000-8000-000000000001",
+      "sessionId": null,
+      "status": "READ"
+    },
+    "unreadCount": null,
+    "isSaved": true
+  }
+]

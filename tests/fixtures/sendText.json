@@ -1,0 +1,23 @@
+{
+  "key": {
+    "remoteJid": "5511999990001@s.whatsapp.net",
+    "fromMe": true,
+    "id": "3EB0F1E2D3C4B5A6978869"
+  },
+  "pushName": "Você",
+  "status": "PENDING",
+  "message": {
+    "conversation": "Olá!"
+  },
+  "contextInfo": {
+    "mentionedJid": [],
+    "groupMentions": [],
+    "disappearingMode": {
+      "initiator": 0
+    }
+  },
+  "messageType": "conversation",
+  "messageTimestamp": 1759151200,
+  "instanceId": "a1b2c3d4-0000-4000-8000-000000000001",
+  "source": "web"
+}

@@ -1,0 +1,109 @@
+{
+  "messages": {
+    "total": 4,
+    "pages": 1,
+    "currentPage": 1,
+    "records": [
+      {
+        "id": "cmb1x9k2l0003abcd5678ijkl",
+        "key": {
+          "id": "3EB0A1B2C3D4E5F6A7B8C9",
+          "fromMe": false,
+          "remoteJid": "5511999990001@s.whatsapp.net"
+        },
+        "pushName": "Ana Souza",
+        "messageType": "conversation",
+        "message": {
+          "conversation": "Oi! Tudo certo para amanhã?",
+          "messageContextInfo": {
+            "deviceListMetadataVersion": 2
+          }
+        },
+        "messageTimestamp": 1759151112,
+        "instanceId": "a1b2c3d4-0000-4000-8000-000000000001",
+        "source": "android",
+        "contextInfo": null,
+        "MessageUpdate": []
+      },
+      {
+        "id": "cmb1x9k2l0004abcd5678ijkl",
+        "key": {
+          "id": "3EB0C0FFEE000000000001",
+          "fromMe": false,
+          "remoteJid": "5511999990001@s.whatsapp.net"
+        },
+        "pushName": "Ana Souza",
+        "messageType": "reactionMessage",
+        "message": {
+          "reactionMessage": {
+            "key": {
+              "id": "3EB0DEADBEEF0000000002",
+              "fromMe": true,
+              "remoteJid": "5511999990001@s.whatsapp.net"
+            },
+            "text": "👍"
+          }
+        },
+        "messageTimestamp": 1759151000,
+        "instanceId": "a1b2c3d4-0000-4000-8000-000000000001",
+        "source": "android",
+        "contextInfo": null,
+        "MessageUpdate": []
+      },
+      {
+        "id": "cmb1x9k2l0005abcd5678ijkl",
+        "key": {
+          "id": "3EB0DEADBEEF0000000002",
+          "fromMe": true,
+          "remoteJid": "5511999990001@s.whatsapp.net"
+        },
+        "pushName": "Você",
+        "messageType": "conversation",
+        "message": {
+          "conversation": "Combinado, até amanhã"
+        },
+        "messageTimestamp": 1759150900,
+        "instanceId": "a1b2c3d4-0000-4000-8000-000000000001",
+        "source": "web",
+        "contextInfo": {
+          "mentionedJid": [],
+          "groupMentions": []
+        },
+        "MessageUpdate": [
+          {
+            "status": "SERVER_ACK"
+          },
+          {
+            "status": "DELIVERY_ACK"
+          },
+          {
+            "status": "READ"
+          }
+        ]
+      },
+      {
+        "id": "cmb1x9k2l0006abcd5678ijkl",
+        "key": {
+          "id": "3A1234567890ABCDEF12",
+          "fromMe": false,
+          "remoteJid": "5511999990001@s.whatsapp.net"
+        },
+        "pushName": "Ana Souza",
+        "messageType": "audioMessage",
+        "message": {
+          "audioMessage": {
+            "url": "https://mmg.whatsapp.net/v/t62.7117-24/000_n.enc",
+            "mimetype": "audio/ogg; codecs=opus",
+            "seconds": 7,
+            "ptt": true
+          }
+        },
+        "messageTimestamp": 1759150800,
+        "instanceId": "a1b2c3d4-0000-4000-8000-000000000001",
+        "source": "ios",
+        "contextInfo": null,
+        "MessageUpdate": []
+      }
+    ]
+  }
+}

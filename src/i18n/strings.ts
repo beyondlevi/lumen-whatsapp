@@ -1,0 +1,221 @@
+// Every user-facing string lives in this file. English is the default;
+// Portuguese (pt-BR copy) is chosen for any `pt-*` browser language.
+
+const en = {
+  appName: 'WhatsApp',
+  chatsHeader: 'Chats',
+  offlineMeta: 'Offline',
+  chatListLabel: 'WhatsApp chats',
+  emptyTitle: 'No chats yet',
+  emptyBody: 'New WhatsApp conversations will appear here.',
+  emptyLabel: 'No chats',
+
+  setupHeader: 'Setup',
+  setupTitle: 'Connect WhatsApp',
+  setupBody:
+    'Open the Lumen app on your phone and fill in the Evolution server URL, the instance, and the API key for this app.',
+  setupMissingLabel: 'MISSING',
+  setupLabel: 'Setup required',
+  setupCheckAgain: 'Check again',
+  setupStillMissing: 'Still not configured',
+  fieldUrl: 'Server URL',
+  fieldInstance: 'Instance',
+  fieldApiKey: 'API key',
+
+  connectingHeader: 'WhatsApp',
+  connectingTitle: 'Connecting…',
+  connectingBody: 'Waiting for the connection to the Evolution server.',
+  connectingLabel: 'Connecting',
+
+  errorHeader: 'Connection',
+  errorLabel: 'Connection error',
+  errorDetailLabel: 'DETAIL',
+  retry: 'Try again',
+  errNetworkTitle: "Can't reach the server",
+  errNetworkBody:
+    'Check the internet connection and the server URL. The Evolution server must also allow this app in CORS_ORIGIN.',
+  errAuthTitle: 'API key rejected',
+  errAuthBody:
+    'The server refused the API key. Update it in the Lumen app on your phone.',
+  errInstanceTitle: 'Instance not found',
+  errInstanceBody:
+    'The server has no instance named “{instance}”. Check the instance name and the server URL in the Lumen app on your phone.',
+  errServerTitle: 'Server error',
+  errServerBody: 'The Evolution server could not answer. Try again in a moment.',
+  errConfigTitle: 'Invalid server URL',
+  errConfigBody:
+    'The server URL must start with http:// or https://. Fix it in the Lumen app on your phone.',
+  httpStatus: 'HTTP {status}',
+
+  threadLabel: 'Conversation with {name}',
+  threadLoadingTitle: 'Loading messages…',
+  threadEmptyTitle: 'No recent messages',
+  threadEmptyBody: 'Messages in this chat will appear here.',
+  threadStatusLabel: 'Messages',
+  replyHint: 'Reply',
+  quoteHint: 'Reply to “{text}”',
+  quoteBubbleLabel: 'Reply to this message: {message}',
+  replyFieldLabel: 'Reply to {name}',
+  sendLabel: 'Send',
+  sendingLabel: 'Sending',
+  messageSent: 'Message sent',
+  sendFailed: 'Not sent: {reason}',
+  connectionLost: 'Connection lost. Retrying…',
+
+  reasonNetwork: 'no connection',
+  reasonAuth: 'API key rejected',
+  reasonInstance: 'instance not found',
+  reasonServer: 'server error',
+  reasonRejected: 'rejected by the server',
+
+  you: 'You',
+  yesterday: 'Yesterday',
+  unknownContact: 'Unknown contact',
+  bubbleLabel: '{sender}: {text}, {time}',
+  senderPrefix: '{sender}: {text}',
+  markerWithCaption: '{marker}: {caption}',
+  markerPhoto: 'Photo',
+  markerVideo: 'Video',
+  markerAudio: 'Audio',
+  markerSticker: 'Sticker',
+  markerDocument: 'Document',
+  markerLocation: 'Location',
+  markerContact: 'Contact',
+  markerPoll: 'Poll',
+  markerReaction: 'Reaction {emoji}',
+  markerDeleted: 'Message deleted',
+  markerUnsupported: 'Unsupported message',
+  markerNoPreview: 'No messages',
+};
+
+export type StringKey = keyof typeof en;
+type Strings = Record<StringKey, string>;
+
+const pt: Strings = {
+  appName: 'WhatsApp',
+  chatsHeader: 'Conversas',
+  offlineMeta: 'Sem conexão',
+  chatListLabel: 'Conversas do WhatsApp',
+  emptyTitle: 'Nenhuma conversa',
+  emptyBody: 'As novas conversas do WhatsApp aparecem aqui.',
+  emptyLabel: 'Sem conversas',
+
+  setupHeader: 'Configuração',
+  setupTitle: 'Conectar o WhatsApp',
+  setupBody:
+    'Abra o app Lumen no celular e preencha a URL do servidor Evolution, a instância e a API key deste app.',
+  setupMissingLabel: 'FALTANDO',
+  setupLabel: 'Configuração necessária',
+  setupCheckAgain: 'Verificar de novo',
+  setupStillMissing: 'Ainda não configurado',
+  fieldUrl: 'URL do servidor',
+  fieldInstance: 'Instância',
+  fieldApiKey: 'API key',
+
+  connectingHeader: 'WhatsApp',
+  connectingTitle: 'Conectando…',
+  connectingBody: 'Aguardando a conexão com o servidor Evolution.',
+  connectingLabel: 'Conectando',
+
+  errorHeader: 'Conexão',
+  errorLabel: 'Erro de conexão',
+  errorDetailLabel: 'DETALHE',
+  retry: 'Tentar de novo',
+  errNetworkTitle: 'Servidor inacessível',
+  errNetworkBody:
+    'Verifique a internet e a URL do servidor. O servidor Evolution também precisa liberar este app em CORS_ORIGIN.',
+  errAuthTitle: 'API key recusada',
+  errAuthBody:
+    'O servidor recusou a API key. Atualize-a no app Lumen do celular.',
+  errInstanceTitle: 'Instância não encontrada',
+  errInstanceBody:
+    'O servidor não tem uma instância chamada “{instance}”. Confira o nome da instância e a URL do servidor no app Lumen do celular.',
+  errServerTitle: 'Erro no servidor',
+  errServerBody: 'O servidor Evolution não conseguiu responder. Tente de novo daqui a pouco.',
+  errConfigTitle: 'URL do servidor inválida',
+  errConfigBody:
+    'A URL do servidor precisa começar com http:// ou https://. Corrija-a no app Lumen do celular.',
+  httpStatus: 'HTTP {status}',
+
+  threadLabel: 'Conversa com {name}',
+  threadLoadingTitle: 'Carregando mensagens…',
+  threadEmptyTitle: 'Nenhuma mensagem recente',
+  threadEmptyBody: 'As mensagens desta conversa aparecem aqui.',
+  threadStatusLabel: 'Mensagens',
+  replyHint: 'Responder',
+  quoteHint: 'Responder a “{text}”',
+  quoteBubbleLabel: 'Responder a esta mensagem: {message}',
+  replyFieldLabel: 'Responder a {name}',
+  sendLabel: 'Enviar',
+  sendingLabel: 'Enviando',
+  messageSent: 'Mensagem enviada',
+  sendFailed: 'Não enviada: {reason}',
+  connectionLost: 'Conexão perdida. Tentando de novo…',
+
+  reasonNetwork: 'sem conexão',
+  reasonAuth: 'API key recusada',
+  reasonInstance: 'instância não encontrada',
+  reasonServer: 'erro no servidor',
+  reasonRejected: 'recusada pelo servidor',
+
+  you: 'Você',
+  yesterday: 'Ontem',
+  unknownContact: 'Contato desconhecido',
+  bubbleLabel: '{sender}: {text}, {time}',
+  senderPrefix: '{sender}: {text}',
+  markerWithCaption: '{marker}: {caption}',
+  markerPhoto: 'Foto',
+  markerVideo: 'Vídeo',
+  markerAudio: 'Áudio',
+  markerSticker: 'Figurinha',
+  markerDocument: 'Documento',
+  markerLocation: 'Localização',
+  markerContact: 'Contato',
+  markerPoll: 'Enquete',
+  markerReaction: 'Reação {emoji}',
+  markerDeleted: 'Mensagem apagada',
+  markerUnsupported: 'Mensagem não suportada',
+  markerNoPreview: 'Sem mensagens',
+};
+
+const dictionaries = {en, pt} satisfies Record<string, Strings>;
+export type Locale = keyof typeof dictionaries;
+
+/** Picks the dictionary from the base language (`pt-PT` and `pt-BR` both map to `pt`). */
+export function resolveLocale(languages: readonly string[]): Locale {
+  for (const language of languages) {
+    const base = language.toLowerCase().split('-')[0];
+    if (base in dictionaries) {
+      return base as Locale;
+    }
+  }
+  return 'en';
+}
+
+function browserLanguages(): string[] {
+  if (typeof navigator === 'undefined') {
+    return [];
+  }
+  // Only the primary language decides; `navigator.languages` may list extras.
+  return navigator.language ? [navigator.language] : [];
+}
+
+export const locale: Locale = resolveLocale(browserLanguages());
+
+export function translate(
+  target: Locale,
+  key: StringKey,
+  params?: Record<string, string | number>,
+): string {
+  const template = dictionaries[target][key];
+  if (params == null) {
+    return template;
+  }
+  return template.replace(/\{(\w+)\}/g, (match, name: string) =>
+    name in params ? String(params[name]) : match,
+  );
+}
+
+export function t(key: StringKey, params?: Record<string, string | number>): string {
+  return translate(locale, key, params);
+}
