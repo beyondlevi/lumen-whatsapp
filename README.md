@@ -179,5 +179,8 @@ calls to the mock. It covers:
 A smoke test for a real Chromium 95 (Android System WebView version) is in `tests/e2e/chromium95.mjs`; its
 header lists the setup.
 
+CI (`.github/workflows/ci.yml`) runs the unit tests, `npm run package`, and the E2E suite. It uploads
+the `.mrbd.zip` and the E2E screenshots as artifacts.
+
 Headless browsers do not replace a test on the glasses (GeckoView and WebView, the dictation composer, and
 the Back gesture).
