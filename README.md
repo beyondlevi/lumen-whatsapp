@@ -59,7 +59,8 @@ Credentials are never bundled and never typed on the glasses. The phone companio
 "lumen_config": [
   {"key": "evolution.url", "label": "Evolution server URL", "type": "url"},
   {"key": "evolution.instance", "label": "Instance", "type": "text"},
-  {"key": "evolution.apiKey", "label": "API key", "type": "secret"}
+  {"key": "evolution.apiKey", "label": "API key", "type": "secret"},
+  {"key": "demo", "label": "Demo mode (screenshots)", "type": "text"}
 ],
 "lumen_internet": true
 ```
@@ -75,10 +76,31 @@ returns a function, the app uses it to unsubscribe. See `src/config/lumenConfig.
 - If any key is missing, the app shows the **Setup** screen, which names the missing fields.
 - A URL that is not `http(s)://` shows **Invalid server URL**.
 
+### Demo mode
+
+For screenshots and videos, set the **Demo mode (screenshots)** field to exactly `demo-captures` (surrounding
+spaces are ignored; any other value, including `demo`, `yes` or a different case, is ignored). The Evolution
+fields can stay filled in. The change applies at once, even with the app open. Clear the field to go back to
+the server.
+
+In demo mode:
+
+- the chats come from `src/demo/demoData.ts`. They are fictional and in English. Phone numbers use the
+  555-0100–0199 range reserved for fiction, and the newest message is at 09:41 "today";
+- `src/demo/demoClient.ts` answers with Evolution-shaped payloads, so the same parsing and screens run. It
+  never calls `fetch`. Sending takes 0.6 s; Maya Chen and Sam Rivera answer your first reply once, after about
+  2.5 s plus the next poll;
+- the app reads and writes no storage. The chat cache, the read marks and the development config are left as
+  they are, and every launch starts from the same unread chats;
+- the copy is in English whatever the device language.
+
+The only request outside the package origin is the Toolkit's Noto Sans stylesheet
+(`fonts.googleapis.com`), which `<App>` adds in both modes before the configuration is read.
+
 ### Development fallback
 
 When `window.lumen` does not exist (a regular browser), the app reads
-`?evolution.url=…&evolution.instance=…&evolution.apiKey=…` and stores the values in localStorage under
+`?evolution.url=…&evolution.instance=…&evolution.apiKey=…` (or `?demo=demo-captures`) and stores the values in localStorage under
 `lumen-whatsapp.dev-config`. It then removes the parameters from the address bar. An empty value clears
 that key.
 
@@ -162,7 +184,8 @@ npm run package       # build + dist/lumen-whatsapp.mrbd.zip
 The `.mrbd.zip` is the contents of `dist/` at the zip root: `index.html`, `manifest.webmanifest`, the
 icons, and `assets/`. The manifest `id` is `cloud.bynd.lumen.whatsapp`; reinstalling with the same id keeps
 the app's localStorage. `scripts/package-offline.mjs` fails the build if the manifest lacks `id`,
-`lumen_config` keys, `lumen_internet: true`, or a square PNG icon ≥ 192 px.
+`lumen_config` keys, `lumen_internet: true`, a `version` equal to `package.json`'s, or a square PNG icon
+≥ 192 px.
 
 The build targets Chromium 95 (the system WebView) and Firefox 115+ (GeckoView is Firefox 156).
 
@@ -189,7 +212,13 @@ calls to the mock. It covers:
 - the conversation rail, the Reply field and Back closing it, and the message menu (reaction and quoted reply);
 - the `window.lumen.config` contract (`get` and `onChange`);
 - pt-PT;
-- the unzipped `.mrbd.zip` with every other origin blocked.
+- the unzipped `.mrbd.zip` with every other origin blocked;
+- demo mode: the capture script key by key, in Chromium, Firefox and the unzipped package, with every
+  request outside the app blocked and sentinel "real" data in storage. The test checks that none of that
+  data appears on screen and that storage is left unchanged. It also switches demo mode on and off while
+  the app is open.
+
+`E2E_TRACE=1` prints the focused element after each key of the capture script.
 
 A smoke test for a real Chromium 95 (Android System WebView version) is in `tests/e2e/chromium95.mjs`; its
 header lists the setup.

@@ -111,10 +111,12 @@ function Thread({jid}: {jid: string}) {
   // Marks the end of the conversation (below the newest bubble and its time).
   const endRef = useRef<HTMLDivElement>(null);
   const lastMessageId = messages.length ? messages[messages.length - 1].id : null;
+  const lastMessageFromMe = messages.length ? messages[messages.length - 1].fromMe : false;
 
   useEffect(() => openThread(jid), [jid, openThread]);
 
-  // Reveal the newest message on entry, and when a new one arrives while the
+  // Reveal the newest message on entry, after sending (the taller reply field
+  // may have pushed the end out of view), and when a new one arrives while the
   // end of the conversation is on screen (the reader is not reading older ones).
   const endVisibleRef = useRef(true);
   const revealedRef = useRef(false);
@@ -133,11 +135,11 @@ function Thread({jid}: {jid: string}) {
     if (lastMessageId == null) {
       return;
     }
-    if (!revealedRef.current || endVisibleRef.current) {
+    if (!revealedRef.current || endVisibleRef.current || lastMessageFromMe) {
       endRef.current?.scrollIntoView({block: 'end'});
       revealedRef.current = true;
     }
-  }, [lastMessageId]);
+  }, [lastMessageId, lastMessageFromMe]);
 
   const handleSend = useCallback(
     (text: string) => {

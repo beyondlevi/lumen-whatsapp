@@ -1,7 +1,8 @@
 import {Toast} from '@wearables-ui-toolkit/mrbd';
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import type {ConfigField} from '../config/lumenConfig';
-import {EvolutionClient, EvolutionError, isAbortError} from '../evolution/client';
+import {createDemoClient} from '../demo/demoClient';
+import {EvolutionClient, EvolutionError, isAbortError, type EvolutionApi} from '../evolution/client';
 import {
   parseChats,
   parseContacts,
@@ -12,7 +13,7 @@ import {
   type ContactNames,
 } from '../evolution/parse';
 import {describeContent} from '../format';
-import {t} from '../i18n/strings';
+import {setLocaleOverride, t} from '../i18n/strings';
 import {cacheAccount, loadChatCache, saveChatCache} from './chatCache';
 import {loadReadMarks, saveReadMarks, type ReadMarks} from './readMarks';
 import {useLumenConfig} from './useLumenConfig';
@@ -102,8 +103,17 @@ export function useWhatsAppState(): WhatsAppState {
   const threadsRef = useRef<Record<string, Thread>>({});
   threadsRef.current = threads;
 
-  const client = useMemo(
-    () => (config.status === 'ready' ? new EvolutionClient(config.config) : null),
+  // Demo mode: fictional chats from src/demo, no server, nothing read from or
+  // written to storage, English copy.
+  const demo = config.status === 'demo';
+  const demoRef = useRef(false);
+  const client = useMemo<EvolutionApi | null>(
+    () =>
+      config.status === 'ready'
+        ? new EvolutionClient(config.config)
+        : config.status === 'demo'
+          ? createDemoClient()
+          : null,
     [config],
   );
 
@@ -118,7 +128,7 @@ export function useWhatsAppState(): WhatsAppState {
     }
   }, []);
 
-  const loadContacts = useCallback(async (evolution: EvolutionClient, signal: AbortSignal) => {
+  const loadContacts = useCallback(async (evolution: EvolutionApi, signal: AbortSignal) => {
     if (contactsRequestedRef.current) {
       return;
     }
@@ -140,7 +150,7 @@ export function useWhatsAppState(): WhatsAppState {
   }, []);
 
   const refreshChats = useCallback(
-    async (evolution: EvolutionClient, signal: AbortSignal) => {
+    async (evolution: EvolutionApi, signal: AbortSignal) => {
       const parsed = parseChats(await evolution.findChats(CHAT_LIMIT, signal), contactsRef.current);
       if (signal.aborted) {
         return;
@@ -162,7 +172,7 @@ export function useWhatsAppState(): WhatsAppState {
     [loadContacts],
   );
 
-  const markRead = useCallback((evolution: EvolutionClient, jid: string, messages: ChatMessage[]) => {
+  const markRead = useCallback((evolution: EvolutionApi, jid: string, messages: ChatMessage[]) => {
     const incoming = messages.filter(message => !message.fromMe);
     const latestIncoming = incoming.length ? incoming[incoming.length - 1].timestamp : 0;
     const chatTime = chatsRef.current.find(chat => chat.jid === jid)?.timestamp ?? 0;
@@ -173,7 +183,9 @@ export function useWhatsAppState(): WhatsAppState {
           return previous;
         }
         const next = {...previous, [jid]: mark};
-        saveReadMarks(next);
+        if (!demoRef.current) {
+          saveReadMarks(next);
+        }
         return next;
       });
     }
@@ -194,7 +206,7 @@ export function useWhatsAppState(): WhatsAppState {
   }, []);
 
   const refreshThread = useCallback(
-    async (evolution: EvolutionClient, jid: string, signal: AbortSignal) => {
+    async (evolution: EvolutionApi, jid: string, signal: AbortSignal) => {
       const messages = parseMessages(
         await evolution.findMessages(jid, MESSAGE_LIMIT, signal),
         contactsRef.current,
@@ -235,6 +247,12 @@ export function useWhatsAppState(): WhatsAppState {
     if (config.status === 'loading') {
       return;
     }
+    // Entering demo mode drops the stored read marks from view; leaving it reads them again.
+    if (demo !== demoRef.current) {
+      demoRef.current = demo;
+      setLocaleOverride(demo ? 'en' : null);
+      setReadMarks(demo ? {} : loadReadMarks());
+    }
     if (config.status === 'missing') {
       setPhase({kind: 'setup', missing: config.missing});
       return;
@@ -253,7 +271,7 @@ export function useWhatsAppState(): WhatsAppState {
     offlineRef.current = false;
     setOffline(false);
     // Show the last known chats right away; the header spins until the refresh lands.
-    const cached = loadChatCache(cacheAccount(config.config));
+    const cached = config.status === 'ready' ? loadChatCache(cacheAccount(config.config)) : null;
     setChats(cached?.chats ?? []);
     setThreads(
       Object.fromEntries(
@@ -297,7 +315,7 @@ export function useWhatsAppState(): WhatsAppState {
       controller.abort();
       clearTimeout(timer);
     };
-  }, [client, config, connectAttempt, refreshChats, setOfflineState]);
+  }, [client, config, connectAttempt, demo, refreshChats, setOfflineState]);
 
   // Polling while ready: the open thread every 3 s, the chat list every 5 s
   // (every ~15 s while a thread is open). Paused while the page is hidden.

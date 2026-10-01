@@ -1,6 +1,6 @@
 import type {Chat, ChatMessage, MessageContent} from './evolution/parse';
 import {phoneFromJid} from './evolution/parse';
-import {locale, t, type StringKey} from './i18n/strings';
+import {locale, t, type Locale, type StringKey} from './i18n/strings';
 
 const MARKER_KEYS: Partial<Record<MessageContent['kind'], StringKey>> = {
   photo: 'markerPhoto',
@@ -60,9 +60,21 @@ export function initials(name: string): string {
   return Array.from(letters).slice(0, 2).join('').toUpperCase();
 }
 
-const timeFormat = new Intl.DateTimeFormat(locale, {hour: '2-digit', minute: '2-digit'});
-const weekdayFormat = new Intl.DateTimeFormat(locale, {weekday: 'short'});
-const dateFormat = new Intl.DateTimeFormat(locale, {day: '2-digit', month: '2-digit'});
+type DateFormats = {time: Intl.DateTimeFormat; weekday: Intl.DateTimeFormat; date: Intl.DateTimeFormat};
+const dateFormats = new Map<Locale, DateFormats>();
+
+function formats(): DateFormats {
+  let current = dateFormats.get(locale);
+  if (current == null) {
+    current = {
+      time: new Intl.DateTimeFormat(locale, {hour: '2-digit', minute: '2-digit'}),
+      weekday: new Intl.DateTimeFormat(locale, {weekday: 'short'}),
+      date: new Intl.DateTimeFormat(locale, {day: '2-digit', month: '2-digit'}),
+    };
+    dateFormats.set(locale, current);
+  }
+  return current;
+}
 
 function startOfDay(ms: number): number {
   const date = new Date(ms);
@@ -76,25 +88,27 @@ export function formatListTime(ms: number | null, now: number = Date.now()): str
     return undefined;
   }
   const days = Math.round((startOfDay(now) - startOfDay(ms)) / 86400000);
+  const {time, weekday, date} = formats();
   if (days <= 0) {
-    return timeFormat.format(ms);
+    return time.format(ms);
   }
   if (days === 1) {
     return t('yesterday');
   }
   if (days < 7) {
-    return weekdayFormat.format(ms);
+    return weekday.format(ms);
   }
-  return dateFormat.format(ms);
+  return date.format(ms);
 }
 
 export function formatBubbleTime(ms: number, now: number = Date.now()): string {
   const days = Math.round((startOfDay(now) - startOfDay(ms)) / 86400000);
+  const {time: timeFormat, weekday, date} = formats();
   const time = timeFormat.format(ms);
   if (days <= 0) {
     return time;
   }
-  const day = days === 1 ? t('yesterday') : days < 7 ? weekdayFormat.format(ms) : dateFormat.format(ms);
+  const day = days === 1 ? t('yesterday') : days < 7 ? weekday.format(ms) : date.format(ms);
   return `${day} ${time}`;
 }
 

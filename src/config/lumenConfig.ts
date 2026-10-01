@@ -8,12 +8,24 @@
 // values come from `?evolution.url=…&evolution.instance=…&evolution.apiKey=…`
 // and are kept in localStorage. The parameters are removed from the address bar
 // right after they are read.
+//
+// Demo mode: the optional `demo` field set to exactly `demo-captures` replaces
+// the Evolution server with built-in fictional chats (src/demo). Any other
+// value, or an empty field, is ignored.
 
 export const CONFIG_KEYS = {
   url: 'evolution.url',
   instance: 'evolution.instance',
   apiKey: 'evolution.apiKey',
 } as const;
+
+/** Optional `lumen_config` field that turns on demo mode. */
+export const DEMO_KEY = 'demo';
+/** The only value of DEMO_KEY that turns on demo mode. */
+export const DEMO_ACTIVATION = 'demo-captures';
+
+/** Keys accepted from the URL by the development fallback. */
+const URL_KEYS: readonly string[] = [...Object.values(CONFIG_KEYS), DEMO_KEY];
 
 export type ConfigField = keyof typeof CONFIG_KEYS;
 export const CONFIG_FIELDS: readonly ConfigField[] = ['url', 'instance', 'apiKey'];
@@ -31,7 +43,8 @@ export type ConfigState =
   | {status: 'loading'}
   | {status: 'missing'; missing: ConfigField[]}
   | {status: 'invalid'}
-  | {status: 'ready'; config: EvolutionConfig};
+  | {status: 'ready'; config: EvolutionConfig}
+  | {status: 'demo'};
 
 type LumenConfigApi = {
   get(): Promise<ConfigValues>;
@@ -83,7 +96,7 @@ function readDevConfig(storage: Storage): ConfigValues {
 }
 
 /**
- * Development fallback: moves `evolution.*` URL parameters into localStorage
+ * Development fallback: moves `evolution.*` (and `demo`) URL parameters into localStorage
  * and strips them from the address bar so the API key does not linger in the
  * URL or in history. An empty parameter value removes the stored key.
  * Always strips the parameters; only stores them when `store` is true.
@@ -93,7 +106,7 @@ export function captureDevConfigFromUrl(
   win: HostWindow = window,
 ): void {
   const url = new URL(win.location.href);
-  const keys = Object.values(CONFIG_KEYS).filter(key => url.searchParams.has(key));
+  const keys = URL_KEYS.filter(key => url.searchParams.has(key));
   if (keys.length === 0) {
     return;
   }
@@ -152,7 +165,15 @@ export function getConfigSource(win: HostWindow = window): ConfigSource {
   };
 }
 
+export function isDemoActivation(values: ConfigValues | null | undefined): boolean {
+  const value = values?.[DEMO_KEY];
+  return typeof value === 'string' && value.trim() === DEMO_ACTIVATION;
+}
+
 export function parseConfig(values: ConfigValues | null | undefined): ConfigState {
+  if (isDemoActivation(values)) {
+    return {status: 'demo'};
+  }
   const read = (field: ConfigField) => {
     const value = values?.[CONFIG_KEYS[field]];
     return typeof value === 'string' ? value.trim() : '';

@@ -210,7 +210,18 @@ function browserLanguages(): string[] {
   return navigator.language ? [navigator.language] : [];
 }
 
-export const locale: Locale = resolveLocale(browserLanguages());
+const deviceLocale: Locale = resolveLocale(browserLanguages());
+
+/** Language in use: the device's, or English while demo mode forces it. */
+export let locale: Locale = deviceLocale;
+
+/** Forces a language (demo mode) or, with null, goes back to the device's. */
+export function setLocaleOverride(next: Locale | null): void {
+  locale = next ?? deviceLocale;
+  if (typeof document !== 'undefined') {
+    document.documentElement.lang = locale;
+  }
+}
 
 export function translate(
   target: Locale,

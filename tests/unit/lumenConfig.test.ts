@@ -3,6 +3,7 @@ import {
   captureDevConfigFromUrl,
   DEV_STORAGE_KEY,
   getConfigSource,
+  isDemoActivation,
   parseConfig,
   type HostWindow,
 } from '../../src/config/lumenConfig';
@@ -70,6 +71,31 @@ describe('parseConfig', () => {
       status: 'ready',
       config: {url: 'https://evo.example.com/api', instance: 'My Phone', apiKey: 'k'},
     });
+  });
+});
+
+describe('demo mode', () => {
+  const server = {'evolution.url': 'https://evo', 'evolution.instance': 'a', 'evolution.apiKey': 'k'};
+
+  it('turns on only with the exact activation value', () => {
+    expect(parseConfig({demo: 'demo-captures'})).toEqual({status: 'demo'});
+    expect(parseConfig({...server, demo: ' demo-captures '})).toEqual({status: 'demo'});
+    expect(isDemoActivation({demo: 'demo-captures'})).toBe(true);
+  });
+
+  it('ignores any other value and keeps the server configuration', () => {
+    for (const demo of ['', 'demo', 'yes', 'true', '1', 'Demo-Captures', 'demo-captures!']) {
+      expect(parseConfig({...server, demo})).toMatchObject({status: 'ready'});
+      expect(isDemoActivation({demo})).toBe(false);
+    }
+    expect(parseConfig({demo: 'on'})).toEqual({status: 'missing', missing: ['url', 'instance', 'apiKey']});
+  });
+
+  it('is accepted from the URL by the development fallback', () => {
+    const win = fakeWindow('http://localhost/?demo=demo-captures');
+    captureDevConfigFromUrl(true, win);
+    expect(JSON.parse(win.localStorage.getItem(DEV_STORAGE_KEY) ?? '')).toEqual({demo: 'demo-captures'});
+    expect(win.history.replaceState).toHaveBeenCalledWith({idx: 0}, '', '/');
   });
 });
 

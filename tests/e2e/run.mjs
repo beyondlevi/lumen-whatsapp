@@ -3,6 +3,7 @@
 //   npm run build && npm run test:e2e              (Chromium + Firefox)
 //   E2E_BROWSERS=chromium npm run test:e2e
 //   E2E_SKIP_SLOW=1 npm run test:e2e               (skips the 30 s retry window test)
+//   E2E_VIEWPORT=480x640 npm run test:e2e          (Rokid HUD size; default 600x600)
 //
 // The built app is served like the Lumen host serves a package (static files,
 // SPA fallback) on 127.0.0.1:4173; the mock runs on 127.0.0.1:8089, so every
@@ -127,7 +128,8 @@ async function test(name, fn) {
 }
 
 async function newPage(browser, {locale = 'en-US', initScript} = {}) {
-  const context = await browser.newContext({viewport: {width: 600, height: 600}, locale});
+  const [width, height] = (process.env.E2E_VIEWPORT ?? '600x600').split('x').map(Number);
+  const context = await browser.newContext({viewport: {width, height}, locale});
   if (initScript) await context.addInitScript(initScript);
   const page = await context.newPage();
   const problems = [];
@@ -295,6 +297,197 @@ async function mainFlow(browser, label, appUrl = APP) {
   }
 }
 
+// Demo mode. Storage holds sentinel "real" data under the app's keys; none of
+// it may appear on screen, nothing may be written, and every request outside
+// the app's own origin is blocked and recorded.
+const SENTINEL = 'REAL-DATA-SENTINEL';
+const realStorage = {
+  'lumen-whatsapp.chat-cache.v1': JSON.stringify({
+    account: `${MOCK}\nLumen Test`,
+    savedAt: 1790000000000,
+    chats: [{
+      jid: '5511999990001@s.whatsapp.net', name: `${SENTINEL} Person`, isGroup: false, unreadCount: 3,
+      lastMessage: {id: 'real-1', remoteJid: '5511999990001@s.whatsapp.net', fromMe: false, senderName: `${SENTINEL} Person`,
+        timestamp: 4102444800000, content: {kind: 'text', text: `${SENTINEL} message`}},
+      timestamp: 4102444800000,
+    }],
+    threads: {},
+  }),
+  'lumen-whatsapp.read-marks': JSON.stringify({'5511999990001@s.whatsapp.net': 1}),
+  'lumen-whatsapp.dev-config': JSON.stringify({'evolution.url': MOCK, 'evolution.instance': 'Lumen Test', 'evolution.apiKey': 'mock-api-key'}),
+};
+
+function lumenInitScript(values) {
+  return `
+    (() => {
+      const seed = ${JSON.stringify(realStorage)};
+      for (const [key, value] of Object.entries(seed)) localStorage.setItem(key, value);
+      let values = ${JSON.stringify(values)};
+      const listeners = [];
+      window.__lumenSet = next => { values = next; listeners.forEach(cb => cb({...values})); };
+      window.lumen = {config: {
+        get: async () => ({...values}),
+        onChange: cb => { listeners.push(cb); return () => listeners.splice(listeners.indexOf(cb), 1); },
+      }};
+    })();`;
+}
+
+const SERVER_CONFIG = {'evolution.url': MOCK, 'evolution.instance': MOCK_INSTANCE, 'evolution.apiKey': MOCK_API_KEY};
+const DEMO_CONFIG = {...SERVER_CONFIG, demo: 'demo-captures'};
+const MAYA = '12025550101@s.whatsapp.net';
+const HIKE = '120363000000000042@g.us';
+
+async function demoPage(browser, appUrl, values, blocked) {
+  // pt-PT device: demo mode must still be in English.
+  const opened = await newPage(browser, {locale: 'pt-PT', initScript: lumenInitScript(values)});
+  await opened.context.route('**/*', route => {
+    const url = route.request().url();
+    if (url.startsWith(appUrl)) return route.continue();
+    blocked.push(url);
+    return route.abort();
+  });
+  return opened;
+}
+
+async function assertNoRealData(page) {
+  const html = await page.content();
+  assert.ok(!html.includes(SENTINEL), 'no cached real data on screen');
+  for (const word of ['Ana Souza', 'Carla Dias', 'Conversas', 'Ontem', 'Você']) {
+    assert.ok(!html.includes(word), `"${word}" is not on screen`);
+  }
+}
+
+/** Replays the capture script from the delivery notes, key by key, with its waits. */
+async function demoFlow(browser, label, appUrl = APP) {
+  const blocked = [];
+  const {context, page, problems} = await demoPage(browser, appUrl, DEMO_CONFIG, blocked);
+  const shots = [];
+  const step = async (keys, wait, name, check) => {
+    for (const key of keys) {
+      await page.keyboard.press(key);
+      await page.waitForTimeout(500);
+      if (process.env.E2E_TRACE) console.log(`     ${key} -> ${await activeLabel(page)}`);
+    }
+    await page.waitForTimeout(wait);
+    if (check) await check();
+    await assertNoRealData(page);
+    if (name) {
+      await page.screenshot({path: path.join(outDir, `${label}-demo-${name}.png`)});
+      shots.push(name);
+    }
+  };
+  try {
+    await page.goto(`${appUrl}/`);
+    // 1. Chat list
+    await step([], 3000, '01-list', async () => {
+      await waitForText(page, 'Chats');
+      assert.deepEqual(
+        (await rowLabels(page)).map(row => row.split(', ').slice(0, 2).join(', ')),
+        [
+          'Maya Chen, Can you bring the projector?',
+          'Hike Crew, Leo: Photo: Trail map',
+          'Sam Rivera, You: Sounds good',
+          'Bike Shop, Document: Invoice_0042.pdf',
+          'Jordan Lee, Location: Central Station',
+          '+12025550199, Hi! Is the desk still available?',
+        ],
+      );
+      const unread = await page.$$eval('[role="img"][aria-label$="Unread Status"]', e => e.map(x => x.getAttribute('aria-label')));
+      assert.deepEqual(unread, ['Maya Chen, Unread Status', 'Hike Crew, Unread Status', '+12025550199, Unread Status']);
+      assert.match(await activeLabel(page), /^div\|Maya Chen, /);
+      assert.equal(await page.evaluate(() => document.documentElement.lang), 'en');
+    });
+    // 2. End of the list: document, location, unknown number
+    await step(['ArrowDown', 'ArrowDown', 'ArrowDown', 'ArrowDown', 'ArrowDown'], 500, '02-list-end', async () => {
+      assert.match(await activeLabel(page), /^div\|\+12025550199, /);
+    });
+    // 3. Group chat
+    // On entry, focus lands on Reply or on the newest bubble; Down then Left
+    // always ends on Reply.
+    await step(['ArrowUp', 'ArrowUp', 'ArrowUp', 'ArrowUp', 'Enter'], 2000, null);
+    await step(['ArrowDown', 'ArrowLeft'], 300, '03-group', async () => {
+      assert.match(page.url(), new RegExp(encodeURIComponent(HIKE)));
+      assert.equal(await activeLabel(page), 'div|Reply');
+      for (const text of ['Hike Crew', 'Ana Ruiz', 'Priya Nair', 'Leo Park', 'Photo: Trail map', 'Count me in.']) await waitForText(page, text);
+    });
+    // 4. Back to the list, then the 1:1 conversation
+    await step(['Escape'], 1500, null, async () => {
+      assert.match(await activeLabel(page), /^div\|Hike Crew, /);
+    });
+    await step(['ArrowUp', 'Enter'], 2000, null);
+    await step(['ArrowDown', 'ArrowLeft'], 300, '04-thread', async () => {
+      assert.match(page.url(), new RegExp(encodeURIComponent(MAYA)));
+      await waitForText(page, 'Can you bring the projector?');
+      await waitForText(page, "I'll share the slides before then.");
+      assert.equal(await activeLabel(page), 'div|Reply');
+    });
+    // 5. Reply field
+    await step(['Enter'], 800, '05-reply-field', async () => {
+      assert.equal(await activeLabel(page), 'textarea|Reply to Maya Chen');
+    });
+    await dictate(page, 'Sure, I will bring it.');
+    await step([], 300, '06-reply-draft');
+    await step(['ArrowRight'], 300, '07-send-focused', async () => {
+      assert.equal(await activeLabel(page), 'div|Send');
+    });
+    // 6. Send, toast, scripted answer
+    await step(['Enter'], 800, '08-sent', async () => {
+      await waitForText(page, 'Message sent', 2000);
+      assert.equal(await page.locator('textarea').count(), 0);
+    });
+    await step([], 6500, '09-answer', async () => {
+      await waitForText(page, 'Perfect, thanks! See you at 10.', 1000);
+      assert.equal(await activeLabel(page), 'div|Reply');
+    });
+    // 7. Message menu and reaction
+    await step(['ArrowUp', 'Enter'], 800, '10-menu', async () => {
+      assert.equal(await activeLabel(page), 'div|React with 👍');
+    });
+    await step(['ArrowRight', 'Enter'], 300, '11-reacted', async () => {
+      await waitForText(page, 'Reacted ❤️', 2000);
+    });
+    // 8. Quoted reply from the menu (Back closes the field without sending)
+    await step(['Enter', 'ArrowRight', 'ArrowRight', 'ArrowRight', 'ArrowRight'], 300, null, async () => {
+      assert.equal(await activeLabel(page), 'div|Reply');
+    });
+    await step(['Enter'], 800, '12-quoted-reply', async () => {
+      assert.equal(await activeLabel(page), 'textarea|Reply to Maya Chen');
+      const hint = await page.evaluate(() => [...document.querySelectorAll('*')].map(e => e.childNodes.length === 1 && e.textContent?.startsWith('Reply to “') ? e.textContent : null).filter(Boolean).concat(document.querySelector('textarea')?.placeholder ?? ''));
+      assert.ok(hint.includes('Reply to “Perfect, thanks! See yo…”'), `quote hint: ${JSON.stringify(hint)}`);
+    });
+    await step(['Escape'], 800, null, async () => {
+      assert.equal(await page.locator('textarea').count(), 0);
+    });
+    // 9. Back to the list: the chat is read and on top
+    await step(['Escape'], 1500, '13-list-after', async () => {
+      assert.match(await activeLabel(page), /^div\|Maya Chen, /);
+      const unread = await page.$$eval('[role="img"][aria-label$="Unread Status"]', e => e.map(x => x.getAttribute('aria-label')));
+      assert.deepEqual(unread, ['+12025550199, Unread Status']);
+    });
+    // A second visit may put focus on the newest bubble; Down then Left still reaches Reply.
+    await step(['Enter'], 2000, null);
+    await step(['ArrowDown', 'ArrowLeft'], 300, null, async () => {
+      assert.equal(await activeLabel(page), 'div|Reply');
+    });
+    await step(['Escape'], 1500, null, async () => {
+      assert.match(await activeLabel(page), /^div\|Maya Chen, /);
+    });
+    assert.equal(await escapeReachesHost(page), true, 'Escape on the list is left to the platform');
+
+    const fonts = /^https:\/\/fonts\.(googleapis|gstatic)\.com\//;
+    assert.deepEqual(blocked.filter(url => !fonts.test(url)), [], 'no request outside the app origin');
+    assert.deepEqual(
+      await page.evaluate(() => Object.fromEntries(Object.keys(localStorage).sort().map(key => [key, localStorage.getItem(key)]))),
+      Object.fromEntries(Object.keys(realStorage).sort().map(key => [key, realStorage[key]])),
+      'storage is left exactly as it was',
+    );
+    assert.deepEqual(problems, []);
+    return {shots, blocked};
+  } finally {
+    await context.close();
+  }
+}
+
 async function run() {
   const mockServer = await startMockServer(8089);
   const appServer = await startStaticServer(path.join(root, 'dist'), 4173);
@@ -315,6 +508,11 @@ async function run() {
       const browser = await (name === 'firefox' ? firefox : chromium).launch();
       try {
         await test(`[${name}] list, thread actions, Reply field, bubble menu (reaction + quoted reply), polling, Back`, () => mainFlow(browser, name));
+
+        await test(`[${name}] demo mode: capture script, fictional chats only, no requests, storage untouched`, async () => {
+          const {blocked} = await demoFlow(browser, name);
+          console.log(`     blocked (Toolkit font only): ${JSON.stringify(blocked)}`);
+        });
 
         await test(`[${name}] setup screen without configuration`, async () => {
           const {context, page, problems} = await newPage(browser);
@@ -476,7 +674,64 @@ async function run() {
         }
       });
 
+      await test('[chromium] control: without demo, the seeded cache is what the list shows', async () => {
+        const blocked = [];
+        const {context, page} = await demoPage(browser, APP, SERVER_CONFIG, blocked);
+        try {
+          await page.goto(`${APP}/`);
+          await waitForText(page, `${SENTINEL} Person`, 3000);
+        } finally {
+          await context.close();
+        }
+      });
+
+      await test('[chromium] demo mode switched on and off from the phone while the app is open', async () => {
+        await mockPost('/__mock/reset');
+        const {context, page, problems} = await newPage(browser, {initScript: lumenInitScript(SERVER_CONFIG)});
+        try {
+          await page.goto(`${APP}/`);
+          await waitForText(page, 'Carla Dias');
+          await page.waitForTimeout(800);
+          await page.evaluate(values => window.__lumenSet(values), {...SERVER_CONFIG, demo: 'yes'});
+          await page.waitForTimeout(800);
+          assert.ok((await page.content()).includes('Carla Dias'), 'any other value keeps the server');
+          await page.evaluate(values => window.__lumenSet(values), DEMO_CONFIG);
+          await waitForText(page, 'Maya Chen');
+          await page.waitForTimeout(500);
+          await assertNoRealData(page);
+          const before = await page.evaluate(() => localStorage.getItem('lumen-whatsapp.chat-cache.v1'));
+          await press(page, 'Enter');
+          await waitForText(page, 'Can you bring the projector?');
+          await page.waitForTimeout(1500);
+          await press(page, 'Escape');
+          await page.waitForTimeout(800);
+          assert.equal(await page.evaluate(() => localStorage.getItem('lumen-whatsapp.chat-cache.v1')), before, 'demo does not write the cache');
+          await page.evaluate(values => window.__lumenSet(values), {...SERVER_CONFIG, demo: ''});
+          await waitForText(page, 'Ana Souza');
+          await waitForText(page, 'Chats');
+          await page.waitForTimeout(1000);
+          const html = await page.content();
+          assert.ok(!html.includes('Maya Chen'), 'no demo chats after leaving demo mode');
+          const cache = await page.evaluate(() => localStorage.getItem('lumen-whatsapp.chat-cache.v1') ?? '');
+          assert.ok(cache.includes('Ana Souza') && !cache.includes('Maya Chen'), 'cache holds only server chats');
+          const marks = await page.evaluate(() => localStorage.getItem('lumen-whatsapp.read-marks') ?? '');
+          assert.ok(!marks.includes('12025550'), 'no demo read marks stored');
+          assert.deepEqual(problems, []);
+        } finally {
+          await context.close();
+        }
+      });
+
       if (packageServer) {
+        await test('[chromium] offline package (.mrbd.zip) in demo mode: capture script with every outside request blocked', async () => {
+          const pkg = await chromium.launch();
+          try {
+            await demoFlow(pkg, 'package', PACKAGE_APP);
+          } finally {
+            await pkg.close();
+          }
+        });
+
         await test('[chromium] offline package (.mrbd.zip) served from 127.0.0.1, only the Evolution server reachable', async () => {
           const blocked = [];
           const pkg = await chromium.launch();

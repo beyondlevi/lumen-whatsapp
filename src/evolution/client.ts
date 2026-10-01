@@ -41,6 +41,12 @@ export function isAbortError(error: unknown): boolean {
 
 export type MessageKeyRef = {id: string; fromMe: boolean; remoteJid: string};
 
+/** The calls the app makes; implemented by EvolutionClient and by the demo client. */
+export type EvolutionApi = Pick<
+  EvolutionClient,
+  'findChats' | 'findContacts' | 'findMessages' | 'sendText' | 'sendReaction' | 'markMessagesAsRead'
+>;
+
 const REQUEST_TIMEOUT_MS = 15000;
 
 type FetchLike = (input: string, init: RequestInit) => Promise<Response>;

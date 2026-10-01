@@ -18,7 +18,7 @@ const FIELD_LABELS: Record<ConfigField, StringKey> = {
   apiKey: 'fieldApiKey',
 };
 
-const listFormat = new Intl.ListFormat(locale, {type: 'conjunction'});
+const listFormat = () => new Intl.ListFormat(locale, {type: 'conjunction'});
 
 function SetupPage({missing}: {missing: ConfigField[]}) {
   const {reloadConfig} = useWhatsApp();
@@ -37,7 +37,7 @@ function SetupPage({missing}: {missing: ConfigField[]}) {
               {t('setupMissingLabel')}
             </TextView>
             <TextView as="p" textStyle={TextStyle.META1}>
-              {listFormat.format(missing.map(field => t(FIELD_LABELS[field])))}
+              {listFormat().format(missing.map(field => t(FIELD_LABELS[field])))}
             </TextView>
           </div>
         </ScrollView>

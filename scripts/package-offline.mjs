@@ -5,8 +5,9 @@
 // Format expected by the Lumen host (the package is unzipped and served at
 // http://127.0.0.1:<port>/ with an SPA fallback to index.html):
 // - the contents of dist/ at the ROOT of the zip (index.html at the root, no top folder);
-// - manifest.webmanifest at the root with id, name, short_name, start_url,
-//   display and at least one square PNG icon >= 192 px included in the zip;
+// - manifest.webmanifest at the root with id, name, short_name, version (same as
+//   package.json), start_url, display and at least one square PNG icon >= 192 px
+//   included in the zip;
 // - lumen_config (fields the phone companion fills in) and lumen_internet
 //   (route the phone's internet to the package) for this app.
 // Zip entries use a fixed UTC date, so the same dist/ always yields the same zip.
@@ -51,6 +52,8 @@ for (const key of ['id', 'name', 'short_name', 'start_url', 'display', 'icons'])
 }
 if (manifest.start_url !== './') fail('start_url must be "./"');
 if (manifest.display !== 'standalone') fail('display must be "standalone"');
+const appVersion = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version;
+if (manifest.version !== appVersion) fail(`manifest "version" must match package.json (${appVersion})`);
 if (manifest.lumen_internet !== true) fail('manifest must set "lumen_internet": true');
 const configKeys = Array.isArray(manifest.lumen_config)
   ? manifest.lumen_config.map(field => field?.key)
