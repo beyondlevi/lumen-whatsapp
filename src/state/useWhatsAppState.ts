@@ -16,6 +16,8 @@ import {describeContent} from '../format';
 import {setLocaleOverride, t} from '../i18n/strings';
 import {cacheAccount, loadChatCache, saveChatCache} from './chatCache';
 import {loadReadMarks, saveReadMarks, type ReadMarks} from './readMarks';
+import {createAvatarLoader} from './avatars';
+import {createMediaLoader, type LoadedMedia} from './media';
 import {useLumenConfig} from './useLumenConfig';
 
 /** Most recent chats requested from findChats. */
@@ -60,6 +62,12 @@ export type WhatsAppState = {
   sendText(jid: string, text: string, quoted?: ChatMessage | null): Promise<void>;
   /** Reacts to a message with an emoji. */
   sendReaction(message: ChatMessage, emoji: string): Promise<void>;
+  /** Loaded profile picture of a chat, or null (initials are shown). */
+  avatarFor(jid: string): string | null;
+  /** Starts loading a chat's profile picture once; `knownUrl` comes from findChats. */
+  requestAvatar(jid: string, knownUrl?: string): void;
+  /** Downloads a photo or voice message on demand (kept in memory for the session). */
+  loadMedia(message: ChatMessage): Promise<LoadedMedia>;
   /** Chat order last shown by the list; kept across the list route's unmounts. */
   listOrder: {current: string[] | null};
 };
@@ -116,6 +124,23 @@ export function useWhatsAppState(): WhatsAppState {
           : null,
     [config],
   );
+
+  const [avatarVersion, setAvatarVersion] = useState(0);
+  const cacheAccountKey = config.status === 'ready' ? cacheAccount(config.config) : null;
+  const avatars = useMemo(
+    () =>
+      client == null
+        ? null
+        : createAvatarLoader(
+            client,
+            () => setAvatarVersion(version => version + 1),
+            cacheAccountKey == null ? null : {account: cacheAccountKey},
+          ),
+    [cacheAccountKey, client],
+  );
+  useEffect(() => () => avatars?.dispose(), [avatars]);
+  const media = useMemo(() => (client == null ? null : createMediaLoader(client)), [client]);
+  useEffect(() => () => media?.dispose(), [media]);
 
   const setOfflineState = useCallback((value: boolean) => {
     if (offlineRef.current === value) {
@@ -460,21 +485,40 @@ export function useWhatsAppState(): WhatsAppState {
       if (client == null) {
         throw new EvolutionError('network', null, 'Not connected');
       }
-      await client.sendReaction(
-        {
-          id: message.id,
-          fromMe: message.fromMe,
-          remoteJid: message.remoteJid,
-          ...(message.participant ? {participant: message.participant} : {}),
-        },
-        emoji,
-      );
+      const key = {
+        id: message.id,
+        fromMe: message.fromMe,
+        remoteJid: message.remoteJid,
+        ...(message.participant ? {participant: message.participant} : {}),
+      };
+      const response = await client.sendReaction(key, emoji);
+      // Show the badge now; the server's reaction record replaces it on the next poll.
+      const parsed = parseMessage(response);
+      const reaction: ChatMessage = {
+        id: parsed?.content.kind === 'reaction' ? parsed.id : `local-reaction-${Date.now()}`,
+        remoteJid: message.remoteJid,
+        fromMe: true,
+        senderName: null,
+        timestamp: parsed?.timestamp ?? Date.now(),
+        content: {kind: 'reaction', text: emoji, targetId: message.id},
+        pending: true,
+      };
+      const jid = message.remoteJid;
+      setThreads(previous => {
+        const current = previous[jid] ?? {loaded: true, synced: true, messages: []};
+        return {...previous, [jid]: {...current, messages: mergeThread(current.messages, [reaction])}};
+      });
     },
     [client],
   );
 
+  const loadMedia = useCallback(
+    (message: ChatMessage) =>
+      media == null ? Promise.reject(new EvolutionError('network', null, 'Not connected')) : media.load(message),
+    [media],
+  );
+
   // Persist the list and recent messages for an instant start next time.
-  const cacheAccountKey = config.status === 'ready' ? cacheAccount(config.config) : null;
   useEffect(() => {
     if (cacheAccountKey == null || phase.kind !== 'ready' || syncing || chats.length === 0) {
       return;
@@ -520,8 +564,12 @@ export function useWhatsAppState(): WhatsAppState {
       openThread,
       sendText,
       sendReaction,
+      avatarFor: jid => avatars?.get(jid) ?? null,
+      requestAvatar: (jid, knownUrl) => avatars?.request(jid, knownUrl),
+      loadMedia,
       listOrder: listOrderRef,
     }),
-    [chats, config, isUnread, offline, openThread, phase, reloadConfig, sendReaction, sendText, syncing, threads],
+    // avatarVersion: a picture finished loading.
+    [avatarVersion, avatars, chats, config, isUnread, loadMedia, offline, openThread, phase, reloadConfig, sendReaction, sendText, syncing, threads],
   );
 }

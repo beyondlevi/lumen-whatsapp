@@ -2,6 +2,7 @@ import {afterEach, describe, expect, it, vi} from 'vitest';
 import {createDemoClient} from '../../src/demo/demoClient';
 import {parseChats, parseContacts, parseMessages, phoneFromJid} from '../../src/evolution/parse';
 import {chatPreview} from '../../src/format';
+import {splitReactions} from '../../src/reactions';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -39,10 +40,11 @@ describe('demo client', () => {
       'Hike Crew',
       '12025550199@s.whatsapp.net',
     ]);
-    expect(chats.map(chatPreview)).toEqual([
+    expect(chats.map(chat => chatPreview(chat))).toEqual([
       'Can you bring the projector?',
       'Leo: Photo: Trail map',
-      'You: Sounds good, 7 pm works.',
+      // Sam's last record is a reaction to your message, not yet loaded.
+      'Reacted ❤️',
       'Document: Invoice_0042.pdf',
       'Location: Central Station',
       'Hi! Is the desk still available?',
@@ -61,7 +63,7 @@ describe('demo client', () => {
     const maya = parseMessages(await client.findMessages(chats[0].jid, 30));
     expect(maya.some(message => message.fromMe)).toBe(true);
     expect(maya.some(message => !message.fromMe)).toBe(true);
-    const group = parseMessages(await client.findMessages(chats[1].jid, 30));
+    const group = splitReactions(parseMessages(await client.findMessages(chats[1].jid, 30))).messages;
     expect(group.filter(message => !message.fromMe).map(message => message.senderName)).toEqual([
       'Ana Ruiz',
       'Leo Park',
@@ -100,5 +102,41 @@ describe('demo client', () => {
     await first.markMessagesAsRead([{id: 'x', fromMe: false, remoteJid: maya.jid}]);
     const [fresh] = parseChats(await createDemoClient().findChats(40));
     expect(fresh.unreadCount).toBe(2);
+  });
+
+  it('has stacked reactions, pictures, a photo and a voice note', async () => {
+    // Packaged assets resolve against the page origin (127.0.0.1 on the glasses).
+    vi.stubGlobal('location', {href: 'http://127.0.0.1:5500/'});
+    const client = createDemoClient();
+    const chats = parseChats(await client.findChats(40));
+    const [maya, hike, sam, bikes, jordan, unknown] = chats;
+    const group = splitReactions(parseMessages(await client.findMessages(hike.jid, 30)));
+    const leaving = group.messages.find(message => message.content.text === 'Me! Leaving at 7.');
+    expect(group.reactions.get(leaving?.id ?? '')).toEqual([
+      {emoji: '👍', count: 2, mine: false},
+      {emoji: '❤️', count: 1, mine: true},
+    ]);
+    // Pictures: Maya and the group in findChats, Sam and the shop on request, none for the others.
+    expect(maya.avatarUrl).toBeTruthy();
+    expect(hike.avatarUrl).toBeTruthy();
+    expect(sam.avatarUrl).toBeUndefined();
+    expect(await client.fetchProfilePictureUrl(bikes.jid)).toBeTruthy();
+    expect(await client.fetchProfilePictureUrl(jordan.jid)).toBeNull();
+    expect(await client.fetchProfilePictureUrl(unknown.jid)).toBeNull();
+
+    vi.useFakeTimers();
+    const thread = parseMessages(await client.findMessages(maya.jid, 30));
+    const voice = thread.find(message => message.content.kind === 'audio');
+    const photo = thread.find(message => message.content.kind === 'photo');
+    expect(voice?.content.seconds).toBe(6);
+    const voiceMedia = client.getMediaMessage({id: voice?.id ?? '', fromMe: false, remoteJid: maya.jid});
+    const photoMedia = client.getMediaMessage({id: photo?.id ?? '', fromMe: false, remoteJid: maya.jid});
+    const text = thread.find(message => message.content.kind === 'text');
+    const notMedia = client.getMediaMessage({id: text?.id ?? '', fromMe: false, remoteJid: maya.jid});
+    notMedia.catch(() => {});
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(await voiceMedia).toMatchObject({mimetype: 'audio/ogg; codecs=opus'});
+    expect((await photoMedia).url).toBeTruthy();
+    await expect(notMedia).rejects.toThrow('not of the media type');
   });
 });

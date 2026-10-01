@@ -6,6 +6,8 @@
 //   POST /chat/markMessageAsRead/{instance}  {readMessages: [{id, fromMe, remoteJid}]}
 //   POST /message/sendText/{instance}        {number, text, quoted?: {key, message}}
 //   POST /message/sendReaction/{instance}    {key: {id, remoteJid, fromMe, participant?}, reaction}
+//   POST /chat/fetchProfilePictureUrl/{instance}     {number} -> {wuid, profilePictureUrl | null}
+//   POST /chat/getBase64FromMediaMessage/{instance}  {message: {key}, convertToMp4?} -> {mimetype, base64, …}
 // Every call sends the `apikey` header. The instance name is a path segment and
 // is URL-encoded with encodeURIComponent (a space must be %20, never `+`).
 
@@ -44,10 +46,22 @@ export type MessageKeyRef = {id: string; fromMe: boolean; remoteJid: string};
 /** The calls the app makes; implemented by EvolutionClient and by the demo client. */
 export type EvolutionApi = Pick<
   EvolutionClient,
-  'findChats' | 'findContacts' | 'findMessages' | 'sendText' | 'sendReaction' | 'markMessagesAsRead'
+  | 'findChats'
+  | 'findContacts'
+  | 'findMessages'
+  | 'sendText'
+  | 'sendReaction'
+  | 'markMessagesAsRead'
+  | 'fetchProfilePictureUrl'
+  | 'getMediaMessage'
 >;
 
+/** Media of one message: inline base64 (server) or a URL the app can load directly (demo). */
+export type MediaPayload = {mimetype: string; base64?: string; url?: string};
+
 const REQUEST_TIMEOUT_MS = 15000;
+/** The server retries a failed media download once after 5 s, so allow longer. */
+const MEDIA_TIMEOUT_MS = 30000;
 
 type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
 
@@ -78,14 +92,19 @@ export class EvolutionClient {
     return `${this.config.url}/${path}/${encodeURIComponent(this.config.instance)}`;
   }
 
-  private async post<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
+  private async post<T>(
+    path: string,
+    body: unknown,
+    signal?: AbortSignal,
+    timeoutMs: number = REQUEST_TIMEOUT_MS,
+  ): Promise<T> {
     // AbortSignal.any/timeout are too new for Chromium 95, so merge by hand.
     const controller = new AbortController();
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
       controller.abort();
-    }, REQUEST_TIMEOUT_MS);
+    }, timeoutMs);
     const onAbort = () => controller.abort();
     if (signal?.aborted) {
       controller.abort();
@@ -187,5 +206,38 @@ export class EvolutionClient {
 
   markMessagesAsRead(keys: MessageKeyRef[], signal?: AbortSignal): Promise<unknown> {
     return this.post('chat/markMessageAsRead', {readMessages: keys}, signal);
+  }
+
+  /** Profile picture URL of a contact or group, or null when there is none (or it is private). */
+  async fetchProfilePictureUrl(jid: string, signal?: AbortSignal): Promise<string | null> {
+    const body = await this.post<{profilePictureUrl?: unknown} | null>(
+      'chat/fetchProfilePictureUrl',
+      {number: jid},
+      signal,
+    );
+    const url = body?.profilePictureUrl;
+    return typeof url === 'string' && /^https?:/.test(url) ? url : null;
+  }
+
+  /**
+   * Downloads the media of a stored message. The server looks the message up by
+   * key; `convertToMp4` asks it to transcode voice notes (OGG/Opus) to MP4/AAC.
+   */
+  async getMediaMessage(
+    key: MessageKeyRef,
+    options: {convertToMp4?: boolean} = {},
+    signal?: AbortSignal,
+  ): Promise<MediaPayload> {
+    const body = await this.post<{mimetype?: unknown; base64?: unknown} | null>(
+      'chat/getBase64FromMediaMessage',
+      {message: {key}, convertToMp4: options.convertToMp4 === true},
+      signal,
+      MEDIA_TIMEOUT_MS,
+    );
+    if (body == null || typeof body.base64 !== 'string' || body.base64 === '') {
+      throw new EvolutionError('server', null, 'No media in the response');
+    }
+    const mimetype = typeof body.mimetype === 'string' && body.mimetype ? body.mimetype : 'application/octet-stream';
+    return {mimetype, base64: body.base64};
   }
 }

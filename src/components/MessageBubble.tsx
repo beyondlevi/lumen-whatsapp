@@ -1,15 +1,27 @@
 // One chat bubble; based on the UI Toolkit messaging example. Activating a
-// bubble opens its context menu: four reactions and Reply.
+// bubble opens its context menu (View for photos, four reactions, Reply); a
+// voice message plays or pauses instead. Reactions show as a badge under the
+// bubble's bottom-right corner.
 
 import arrowBigReplyFilled from '@wearables-ui-toolkit/icons/svg/arrowbigreply__filled.svg';
+import circlePlayFilled from '@wearables-ui-toolkit/icons/svg/circleplay__filled.svg';
+import expandFilled from '@wearables-ui-toolkit/icons/svg/expand__filled.svg';
+import mediaPauseFilled from '@wearables-ui-toolkit/icons/svg/mediapause__filled.svg';
 import {
   ButtonContextMenuItemView,
+  Chip,
+  ChipStyle,
   Container,
   ContextMenu,
   CornerRadius,
   DismissReason,
   EmojiContextMenuItemView,
+  IconImage,
+  IndeterminateLoader,
+  IndeterminateLoaderSize,
   MaterialLibrary,
+  ProgressIndicator,
+  ProgressIndicatorSize,
   TailShapeProvider,
   TextColor,
   TextStyle,
@@ -19,8 +31,10 @@ import {
 } from '@wearables-ui-toolkit/mrbd';
 import {useLayoutEffect, useMemo, useRef, useState, type MouseEvent} from 'react';
 import type {ChatMessage} from '../evolution/parse';
-import {describeContent, formatBubbleTime, isMarker} from '../format';
+import {describeContent, formatBubbleTime, formatDuration, isMarker} from '../format';
 import {t} from '../i18n/strings';
+import {reactionCount, type ReactionSummary} from '../reactions';
+import type {AudioState} from '../state/useAudioPlayer';
 
 export const REACTIONS = ['👍', '❤️', '😂', '😭'] as const;
 
@@ -30,10 +44,14 @@ type MessageBubbleProps = {
   showSender: boolean;
   /** Shows the time below the last bubble of a run. */
   endsRun: boolean;
-  tails: boolean;
   initialFocusEligible: boolean;
+  reactions?: ReactionSummary[];
+  /** Player state when this is the voice message being played. */
+  audio?: AudioState;
   onReact: (message: ChatMessage, emoji: string) => void;
   onReply: (message: ChatMessage) => void;
+  onView: (message: ChatMessage) => void;
+  onToggleAudio: (message: ChatMessage) => void;
 };
 
 const OUTBOUND_TOKEN_NAMES = {
@@ -63,17 +81,74 @@ function ReactionItem({emoji, onChoose}: ReactionItemProps) {
   return <EmojiContextMenuItemView emoji={emoji} ariaLabel={t('reactWith', {emoji})} onClick={choose} />;
 }
 
+function reactionsText(reactions: ReactionSummary[]): string {
+  return reactions.map(reaction => `${reaction.emoji} ${reaction.count}`).join(', ');
+}
+
+function audioDescription(message: ChatMessage, audio: AudioState | undefined): string {
+  const duration = formatDuration(audio?.duration || message.content.seconds || 0);
+  const position = formatDuration(audio?.position ?? 0);
+  switch (audio?.status) {
+    case 'playing':
+      return t('audioPlaying', {position, duration});
+    case 'paused':
+      return t('audioPaused', {position, duration});
+    case 'loading':
+      return t('audioLoading');
+    default:
+      return t('audioLabel', {duration});
+  }
+}
+
+function AudioContent({message, audio}: {message: ChatMessage; audio?: AudioState}) {
+  const status = audio?.status ?? 'idle';
+  const duration = audio?.duration || message.content.seconds || 0;
+  const position = audio?.position ?? 0;
+  const started = status === 'playing' || status === 'paused';
+  return (
+    <div className="audio-content">
+      {status === 'loading' ? (
+        <IndeterminateLoader size={IndeterminateLoaderSize.SMALL} />
+      ) : (
+        <IconImage className="audio-icon" source={status === 'playing' ? mediaPauseFilled : circlePlayFilled} />
+      )}
+      <div className="audio-track">
+        <ProgressIndicator
+          size={ProgressIndicatorSize.THIN}
+          value={started ? position : 0}
+          maximumValue={duration || 1}
+          isActive={status === 'playing'}
+          announceUpdatesForAccessibility={false}
+          aria-label={t('audioLabel', {duration: formatDuration(duration)})}
+        />
+        <TextView as="p" textStyle={TextStyle.META2} textColor={TextColor.SECONDARY}>
+          {status === 'error'
+            ? t('markerAudio')
+            : started
+              ? `${formatDuration(position)} / ${formatDuration(duration)}`
+              : formatDuration(duration)}
+        </TextView>
+      </div>
+    </div>
+  );
+}
+
 export function MessageBubble({
   message,
   showSender,
   endsRun,
-  tails,
   initialFocusEligible,
+  reactions,
+  audio,
   onReact,
   onReply,
+  onView,
+  onToggleAudio,
 }: MessageBubbleProps) {
   const isOutgoing = message.fromMe;
-  const tailDirection = tails && endsRun ? (isOutgoing ? 'right' : 'left') : 'none';
+  const isAudio = message.content.kind === 'audio';
+  const isPhoto = message.content.kind === 'photo';
+  const tailDirection = endsRun ? (isOutgoing ? 'right' : 'left') : 'none';
   const shapeProvider = useMemo(
     () => new TailShapeProvider(tailDirection, CornerRadius.MEDIUM),
     [tailDirection],
@@ -94,7 +169,12 @@ export function MessageBubble({
   const text = describeContent(message.content);
   const time = formatBubbleTime(message.timestamp);
   const sender = isOutgoing ? t('you') : message.senderName;
-  const spoken = sender ? t('bubbleLabel', {sender, text, time}) : `${text}, ${time}`;
+  const body = isAudio ? audioDescription(message, audio) : text;
+  const spokenBase = sender ? t('bubbleLabel', {sender, text: body, time}) : `${body}, ${time}`;
+  const spoken = reactions?.length
+    ? `${spokenBase}, ${t('reactionsLabel', {list: reactionsText(reactions)})}`
+    : spokenBase;
+  const reactionTotal = reactionCount(reactions);
 
   const [menuOpen, setMenuOpen] = useState(false);
   // Public handle for the bubble that opens the menu, used to return focus to it.
@@ -110,6 +190,7 @@ export function MessageBubble({
   }, [menuOpen]);
 
   const toggleMenu = () => setMenuOpen(open => !open);
+  const toggleAudio = () => onToggleAudio(message);
   const dismissMenuToTrigger = (event?: MouseEvent<HTMLElement>) => {
     // Menu items render in a portal owned by the bubble; keep the click from
     // reaching the bubble and reopening the menu.
@@ -126,6 +207,11 @@ export function MessageBubble({
     setMenuOpen(false);
     onReply(message);
   };
+  const chooseView = (event?: MouseEvent<HTMLElement>) => {
+    event?.stopPropagation();
+    setMenuOpen(false);
+    onView(message);
+  };
 
   const menu = (
     <ContextMenu
@@ -135,6 +221,9 @@ export function MessageBubble({
           dismissMenuToTrigger();
         }
       }}>
+      {isPhoto ? (
+        <ButtonContextMenuItemView title={t('viewAction')} icon={expandFilled} onClick={chooseView} />
+      ) : null}
       {REACTIONS.map(emoji => (
         <ReactionItem key={emoji} emoji={emoji} onChoose={chooseReaction} />
       ))}
@@ -159,32 +248,59 @@ export function MessageBubble({
             {message.senderName}
           </TextView>
         ) : null}
-        <Container
-          ref={bubbleElementRef}
-          aria-haspopup="menu"
-          aria-expanded={menuOpen}
-          ariaLabel={t('messageActionsLabel', {message: spoken})}
-          clickable
-          focusable
-          initialFocusEligible={initialFocusEligible}
-          material={material}
-          onClick={toggleMenu}
-          shapeProvider={shapeProvider}
-          tooltipMode={menuOpen ? TooltipMode.FOCUSED : TooltipMode.NONE}
-          tooltipFocusable
-          tooltipHidesFocusState
-          tooltipContentDescription={t('messageActionsLabel', {message: text})}
-          tooltipContent={menu}>
-          <div className="message-bubble-content">
-            <TextView
-              className="message-text"
-              as="p"
-              textStyle={TextStyle.BODY2}
-              textColor={isMarker(message.content) ? TextColor.SECONDARY : undefined}>
-              {text}
-            </TextView>
-          </div>
-        </Container>
+        <div className="message-stack">
+          {isAudio ? (
+            <Container
+              ref={bubbleElementRef}
+              ariaLabel={spoken}
+              clickable
+              focusable
+              initialFocusEligible={initialFocusEligible}
+              material={material}
+              onClick={toggleAudio}
+              shapeProvider={shapeProvider}>
+              <div className="message-bubble-content">
+                <AudioContent message={message} audio={audio} />
+              </div>
+            </Container>
+          ) : (
+            <Container
+              ref={bubbleElementRef}
+              aria-haspopup="menu"
+              aria-expanded={menuOpen}
+              ariaLabel={t('messageActionsLabel', {message: spoken})}
+              clickable
+              focusable
+              initialFocusEligible={initialFocusEligible}
+              material={material}
+              onClick={toggleMenu}
+              shapeProvider={shapeProvider}
+              tooltipMode={menuOpen ? TooltipMode.FOCUSED : TooltipMode.NONE}
+              tooltipFocusable
+              tooltipHidesFocusState
+              tooltipContentDescription={t('messageActionsLabel', {message: text})}
+              tooltipContent={menu}>
+              <div className="message-bubble-content">
+                <TextView
+                  className="message-text"
+                  as="p"
+                  textStyle={TextStyle.BODY2}
+                  textColor={isMarker(message.content) ? TextColor.SECONDARY : undefined}>
+                  {text}
+                </TextView>
+              </div>
+            </Container>
+          )}
+          {reactions?.length ? (
+            <div className="message-reactions" aria-hidden="true">
+              <Chip
+                chipStyle={ChipStyle.ELEVATED}
+                text={reactions.map(reaction => reaction.emoji).join('')}
+                metadata={reactionTotal > 1 ? String(reactionTotal) : undefined}
+              />
+            </div>
+          ) : null}
+        </div>
         {endsRun ? (
           <TextView
             className="message-timestamp"

@@ -5,10 +5,11 @@ import {
 } from '@wearables-ui-toolkit/mrbd/react-router';
 import {BrowserRouter, Navigate, Route, Routes} from 'react-router-dom';
 import {ChatListPage} from './pages/ChatListPage';
+import {PhotoPage} from './pages/PhotoPage';
 import {ThreadPage} from './pages/ThreadPage';
 
-// Back (Escape) is handled by ReactRouterNavigationProvider: in a thread it
-// returns to the list; on the list, with no history left, it is not consumed,
+// Back (Escape) is handled by ReactRouterNavigationProvider: from a photo it
+// returns to the conversation, in a thread to the list; on the list, with no history left, it is not consumed,
 // so the platform closes the app.
 export default function WhatsAppApp() {
   return (
@@ -20,6 +21,7 @@ export default function WhatsAppApp() {
               <Routes location={location}>
                 <Route path="/" element={<ChatListPage />} />
                 <Route path="/chat/:jid" element={<ThreadPage />} />
+                <Route path="/chat/:jid/photo/:messageId" element={<PhotoPage />} />
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>
             )}

@@ -79,6 +79,12 @@ async function waitForText(page, text, timeout = 10000) {
   await page.getByText(text, {exact: false}).first().waitFor({state: 'visible', timeout});
 }
 
+async function bubbleLabels(page) {
+  return page.$$eval('.message-stack [aria-label]', elements =>
+    elements.map(element => element.getAttribute('aria-label')),
+  );
+}
+
 async function rowLabels(page) {
   return page.$$eval('[role="button"][aria-label]', elements =>
     elements.map(element => element.getAttribute('aria-label')),
@@ -172,10 +178,14 @@ async function mainFlow(browser, label, appUrl = APP) {
     await press(page, 'Enter');
     await page.waitForURL(`**/chat/${encodeURIComponent(ANA)}`);
     await waitForText(page, 'Levo o projetor');
-    for (const text of ['Audio', 'Combinado, até amanhã', 'Reaction 👍', 'Oi! Tudo certo para amanhã?', 'Hide tails']) {
+    for (const text of ['0:07', 'Combinado, até amanhã', 'Oi! Tudo certo para amanhã?', 'Reply']) {
       await waitForText(page, text);
     }
     await page.waitForTimeout(600);
+    // Ana's 👍 is a badge on the message it reacts to, never a bubble; the rail has no tails toggle.
+    assert.ok((await bubbleLabels(page)).some(label => /Combinado, até amanhã, .*reactions 👍 1$/.test(label)), 'reaction badge');
+    assert.equal(await page.getByText('Reaction 👍').count(), 0, 'no reaction bubble');
+    assert.equal(await page.getByText(/tails/i).count(), 0, 'no Hide tails button');
     assert.equal(await page.locator('textarea').count(), 0, 'reply field only appears after Reply');
     assert.notEqual(await activeLabel(page), '(body)', 'something visible has focus on entry');
     const anaAfterOpen = (await mockChats()).find(chat => chat.remoteJid === ANA);
@@ -239,6 +249,19 @@ async function mainFlow(browser, label, appUrl = APP) {
     assert.equal(reactions.at(-1).key.fromMe, false);
     await page.waitForTimeout(300);
     assert.match(await activeLabel(page), /Levo o projetor/, 'focus returns to the bubble');
+    assert.match(await activeLabel(page), /reactions ❤️ 1$/, 'the badge shows at once');
+    await page.waitForTimeout(3500);
+    assert.ok((await bubbleLabels(page)).some(label => /Levo o projetor, .*reactions ❤️ 1$/.test(label)), 'badge kept after the poll');
+    assert.equal(await page.getByText('Reaction ❤️').count(), 0, 'no reaction bubble after the poll');
+
+    // The list previews the last real message, not your reaction
+    await press(page, 'Escape');
+    await page.waitForURL(`${appUrl}/`);
+    await page.waitForTimeout(600);
+    assert.match((await rowLabels(page))[0], /^Ana Souza, You: Sim, tudo certo, /);
+    await press(page, 'Enter');
+    await page.waitForURL(`**/chat/${encodeURIComponent(ANA)}`);
+    await page.waitForTimeout(800);
 
     // New incoming message shows up by polling
     await mockPost('/__mock/incoming', {remoteJid: ANA, text: 'Chegando em 5 min', pushName: 'Ana Souza'});
@@ -252,7 +275,7 @@ async function mainFlow(browser, label, appUrl = APP) {
     await page.waitForTimeout(600);
     assert.match(await activeLabel(page), /^div\|Ana Souza, /, 'focus returns to the opened chat');
     const anaRow = (await rowLabels(page))[0];
-    assert.match(anaRow, /^Ana Souza, (Chegando em 5 min|You: Reaction)/);
+    assert.match(anaRow, /^Ana Souza, Chegando em 5 min/);
 
     // Another chat receives a message while the list is open
     await mockPost('/__mock/incoming', {remoteJid: CARLA, text: 'Cheguei', pushName: 'Carla Dias'});
@@ -358,7 +381,7 @@ async function assertNoRealData(page) {
 }
 
 /** Replays the capture script from the delivery notes, key by key, with its waits. */
-async function demoFlow(browser, label, appUrl = APP) {
+async function demoFlow(browser, label, appUrl = APP, {audioOutput = true} = {}) {
   const blocked = [];
   const {context, page, problems} = await demoPage(browser, appUrl, DEMO_CONFIG, blocked);
   const shots = [];
@@ -376,9 +399,13 @@ async function demoFlow(browser, label, appUrl = APP) {
       shots.push(name);
     }
   };
+  const unreadRows = () => page.$$eval('[role="img"][aria-label$="Unread Status"]', e => e.map(x => x.getAttribute('aria-label')));
+  // On entry, focus lands on Reply or on the newest bubble; Down then Left
+  // always ends on Reply.
+  const toReply = ['ArrowDown', 'ArrowLeft'];
   try {
     await page.goto(`${appUrl}/`);
-    // 1. Chat list
+    // 1. Chat list: pictures, unread, a reaction preview
     await step([], 3000, '01-list', async () => {
       await waitForText(page, 'Chats');
       assert.deepEqual(
@@ -386,91 +413,118 @@ async function demoFlow(browser, label, appUrl = APP) {
         [
           'Maya Chen, Can you bring the projector?',
           'Hike Crew, Leo: Photo: Trail map',
-          'Sam Rivera, You: Sounds good',
+          'Sam Rivera, Reacted ❤️',
           'Bike Shop, Document: Invoice_0042.pdf',
           'Jordan Lee, Location: Central Station',
           '+12025550199, Hi! Is the desk still available?',
         ],
       );
-      const unread = await page.$$eval('[role="img"][aria-label$="Unread Status"]', e => e.map(x => x.getAttribute('aria-label')));
-      assert.deepEqual(unread, ['Maya Chen, Unread Status', 'Hike Crew, Unread Status', '+12025550199, Unread Status']);
+      assert.deepEqual(await unreadRows(), ['Maya Chen, Unread Status', 'Hike Crew, Unread Status', '+12025550199, Unread Status']);
       assert.match(await activeLabel(page), /^div\|Maya Chen, /);
       assert.equal(await page.evaluate(() => document.documentElement.lang), 'en');
+      const pictures = await avatarSources(page);
+      for (const name of ['maya', 'hike', 'sam', 'bikes']) {
+        assert.ok(pictures.some(src => src.includes(`avatar-${name}`) || src.startsWith('data:image/webp')), `${name} picture`);
+      }
+      assert.ok(pictures.length >= 4, `four pictures: ${pictures.length}`);
+      assert.ok(await page.getByText('JL', {exact: true}).count() >= 1, 'Jordan keeps initials');
     });
     // 2. End of the list: document, location, unknown number
     await step(['ArrowDown', 'ArrowDown', 'ArrowDown', 'ArrowDown', 'ArrowDown'], 500, '02-list-end', async () => {
       assert.match(await activeLabel(page), /^div\|\+12025550199, /);
     });
-    // 3. Group chat
-    // On entry, focus lands on Reply or on the newest bubble; Down then Left
-    // always ends on Reply.
+    // 3. Group chat, then its stacked reactions
     await step(['ArrowUp', 'ArrowUp', 'ArrowUp', 'ArrowUp', 'Enter'], 2000, null);
-    await step(['ArrowDown', 'ArrowLeft'], 300, '03-group', async () => {
+    await step(toReply, 300, '03-group', async () => {
       assert.match(page.url(), new RegExp(encodeURIComponent(HIKE)));
       assert.equal(await activeLabel(page), 'div|Reply');
-      for (const text of ['Hike Crew', 'Ana Ruiz', 'Priya Nair', 'Leo Park', 'Photo: Trail map', 'Count me in.']) await waitForText(page, text);
+      for (const text of ['Hike Crew', 'Priya Nair', 'Leo Park', 'Photo: Trail map', 'Count me in.']) await waitForText(page, text);
+    });
+    await step(['ArrowUp', 'ArrowUp', 'ArrowUp', 'ArrowUp'], 500, '04-group-reactions', async () => {
+      assert.match(await activeLabel(page), /Me! Leaving at 7\., .*reactions 👍 2, ❤️ 1$/);
+      assert.ok(await page.getByText('👍❤️', {exact: true}).count() >= 1, 'stacked badge');
+      assert.equal(await page.getByText(/^Reaction /).count(), 0, 'no reaction bubbles');
     });
     // 4. Back to the list, then the 1:1 conversation
     await step(['Escape'], 1500, null, async () => {
       assert.match(await activeLabel(page), /^div\|Hike Crew, /);
     });
     await step(['ArrowUp', 'Enter'], 2000, null);
-    await step(['ArrowDown', 'ArrowLeft'], 300, '04-thread', async () => {
+    await step(toReply, 300, '05-thread', async () => {
       assert.match(page.url(), new RegExp(encodeURIComponent(MAYA)));
       await waitForText(page, 'Can you bring the projector?');
-      await waitForText(page, "I'll share the slides before then.");
       assert.equal(await activeLabel(page), 'div|Reply');
     });
-    // 5. Reply field
-    await step(['Enter'], 800, '05-reply-field', async () => {
+    // 5. Reply
+    await step(['Enter'], 800, '06-reply-field', async () => {
       assert.equal(await activeLabel(page), 'textarea|Reply to Maya Chen');
     });
     await dictate(page, 'Sure, I will bring it.');
-    await step([], 300, '06-reply-draft');
-    await step(['ArrowRight'], 300, '07-send-focused', async () => {
+    await step([], 300, '07-reply-draft');
+    await step(['ArrowRight'], 300, '08-send-focused', async () => {
       assert.equal(await activeLabel(page), 'div|Send');
     });
-    // 6. Send, toast, scripted answer
-    await step(['Enter'], 800, '08-sent', async () => {
+    await step(['Enter'], 800, '09-sent', async () => {
       await waitForText(page, 'Message sent', 2000);
       assert.equal(await page.locator('textarea').count(), 0);
     });
-    await step([], 6500, '09-answer', async () => {
+    await step([], 6500, '10-answer', async () => {
       await waitForText(page, 'Perfect, thanks! See you at 10.', 1000);
       assert.equal(await activeLabel(page), 'div|Reply');
     });
-    // 7. Message menu and reaction
-    await step(['ArrowUp', 'Enter'], 800, '10-menu', async () => {
+    // 6. Message menu and reaction: a badge on that bubble
+    await step(['ArrowUp', 'Enter'], 800, '11-menu', async () => {
       assert.equal(await activeLabel(page), 'div|React with 👍');
     });
-    await step(['ArrowRight', 'Enter'], 300, '11-reacted', async () => {
+    await step(['ArrowRight', 'Enter'], 600, '12-reacted', async () => {
       await waitForText(page, 'Reacted ❤️', 2000);
+      assert.match(await activeLabel(page), /Perfect, thanks! See you at 10\., .*reactions ❤️ 1$/);
     });
-    // 8. Quoted reply from the menu (Back closes the field without sending)
+    // 7. Quoted reply from the menu (Back closes the field without sending)
     await step(['Enter', 'ArrowRight', 'ArrowRight', 'ArrowRight', 'ArrowRight'], 300, null, async () => {
       assert.equal(await activeLabel(page), 'div|Reply');
     });
-    await step(['Enter'], 800, '12-quoted-reply', async () => {
+    await step(['Enter'], 800, '13-quoted-reply', async () => {
       assert.equal(await activeLabel(page), 'textarea|Reply to Maya Chen');
       const hint = await page.evaluate(() => [...document.querySelectorAll('*')].map(e => e.childNodes.length === 1 && e.textContent?.startsWith('Reply to “') ? e.textContent : null).filter(Boolean).concat(document.querySelector('textarea')?.placeholder ?? ''));
       assert.ok(hint.includes('Reply to “Perfect, thanks! See yo…”'), `quote hint: ${JSON.stringify(hint)}`);
     });
     await step(['Escape'], 800, null, async () => {
       assert.equal(await page.locator('textarea').count(), 0);
-    });
-    // 9. Back to the list: the chat is read and on top
-    await step(['Escape'], 1500, '13-list-after', async () => {
-      assert.match(await activeLabel(page), /^div\|Maya Chen, /);
-      const unread = await page.$$eval('[role="img"][aria-label$="Unread Status"]', e => e.map(x => x.getAttribute('aria-label')));
-      assert.deepEqual(unread, ['+12025550199, Unread Status']);
-    });
-    // A second visit may put focus on the newest bubble; Down then Left still reaches Reply.
-    await step(['Enter'], 2000, null);
-    await step(['ArrowDown', 'ArrowLeft'], 300, null, async () => {
       assert.equal(await activeLabel(page), 'div|Reply');
     });
+    // 8. Voice message: Enter plays, Enter pauses
+    await step(['ArrowUp', 'ArrowUp', 'ArrowUp', 'ArrowUp', 'ArrowUp'], 300, null, async () => {
+      assert.match(await activeLabel(page), /Maya Chen: Voice message, 0:06/);
+    });
+    await step(['Enter'], 2000, audioOutput ? '14-audio-playing' : null, async () => {
+      if (audioOutput) assert.match(await activeLabel(page), /Playing, 0:0[1-5] of 0:06/);
+    });
+    await step(['Enter'], 300, audioOutput ? '15-audio-paused' : null, async () => {
+      if (audioOutput) assert.match(await activeLabel(page), /Paused, 0:0[1-5] of 0:06/);
+    });
+    // 9. Photo: View is the first menu item; Back returns to the same bubble
+    await step(['ArrowUp'], 300, null, async () => {
+      assert.match(await activeLabel(page), /Photo: Sketch from Monday/);
+    });
+    await step(['Enter'], 800, '16-photo-menu', async () => {
+      assert.equal(await activeLabel(page), 'div|View');
+    });
+    await step(['Enter'], 2000, '17-photo-view', async () => {
+      assert.match(page.url(), /\/photo\//);
+      assert.ok(await page.evaluate(() => document.querySelector('.photo-image')?.naturalWidth > 0), 'photo shown');
+    });
     await step(['Escape'], 1500, null, async () => {
-      assert.match(await activeLabel(page), /^div\|Maya Chen, /);
+      assert.match(await activeLabel(page), /Photo: Sketch from Monday/);
+    });
+    // 10. Your own message with Maya's 👍
+    await step(['ArrowUp', 'ArrowUp'], 500, '18-reaction-badge', async () => {
+      assert.match(await activeLabel(page), /Yes, 10:00 in Room 3\., .*reactions 👍 1$/);
+    });
+    // 11. Back to the list: read, on top, previewing the last real message
+    await step(['Escape'], 1500, '19-list-after', async () => {
+      assert.match(await activeLabel(page), /^div\|Maya Chen, Perfect, thanks! See you at 10\., /);
+      assert.deepEqual(await unreadRows(), ['+12025550199, Unread Status']);
     });
     assert.equal(await escapeReachesHost(page), true, 'Escape on the list is left to the platform');
 
@@ -483,6 +537,114 @@ async function demoFlow(browser, label, appUrl = APP) {
     );
     assert.deepEqual(problems, []);
     return {shots, blocked};
+  } finally {
+    await context.close();
+  }
+}
+
+const FAMILY = '120363000000000001@g.us';
+
+/** Waits until the focused element's label matches. */
+async function waitForFocus(page, pattern, timeout = 5000) {
+  const started = Date.now();
+  while (Date.now() - started < timeout) {
+    if (pattern.test(await activeLabel(page))) return;
+    await page.waitForTimeout(100);
+  }
+  throw new Error(`focus never matched ${pattern}; last: ${await activeLabel(page)}`);
+}
+
+/** Avatar <img> sources currently in the document. */
+async function avatarSources(page) {
+  return page.$$eval('img', images => images.filter(image => image.complete && image.naturalWidth > 0).map(image => image.src));
+}
+
+/** Profile pictures, full-screen photo (and its failure), and voice playback against the mock. */
+async function mediaFlow(browser, {audioOutput}) {
+  await mockPost('/__mock/reset');
+  const {context, page, problems} = await newPage(browser);
+  try {
+    await page.goto(`${APP}/?${configQuery()}`);
+    await waitForText(page, 'Carla Dias');
+    await page.waitForTimeout(1500);
+    // Ana's picture comes with findChats; Família's from fetchProfilePictureUrl;
+    // Carla's URL is broken and keeps the initials.
+    const sources = await avatarSources(page);
+    assert.ok(sources.some(src => src.endsWith('/avatar-maya.webp')), `Ana picture: ${sources}`);
+    assert.ok(sources.some(src => src.endsWith('/avatar-hike.webp')), `Família picture: ${sources}`);
+    assert.ok(!sources.some(src => src.includes('missing')), 'broken picture not shown');
+    assert.ok(await page.getByText('CD', {exact: true}).count() >= 1, 'Carla keeps her initials');
+    const requested = await fetch(`${MOCK}/__mock/picture-requests`).then(response => response.json());
+    assert.ok(requested.includes(FAMILY) && requested.includes(CARLA) && !requested.includes(ANA), `lookups: ${requested}`);
+    await page.screenshot({path: path.join(outDir, 'media-1-avatars.png')});
+
+    // Next launch: pictures known from the cache, no new lookups
+    await mockPost('/__mock/reset');
+    await page.reload();
+    await waitForText(page, 'Carla Dias');
+    await page.waitForTimeout(1500);
+    assert.deepEqual(await fetch(`${MOCK}/__mock/picture-requests`).then(response => response.json()), [], 'cached lookups');
+
+    // Família: photo → menu with View first → full screen → Back to the same bubble
+    await pressUntil(page, 'ArrowDown', /^div\|Família, /);
+    await press(page, 'Enter');
+    await page.waitForURL(`**/chat/${encodeURIComponent(FAMILY)}`);
+    await waitForText(page, 'Photo: Olha isso');
+    await page.waitForTimeout(800);
+    assert.ok((await avatarSources(page)).some(src => src.endsWith('/avatar-hike.webp')), 'header picture');
+    await press(page, 'ArrowDown');
+    await press(page, 'ArrowLeft');
+    await pressUntil(page, 'ArrowUp', /Photo: Olha isso/);
+    await press(page, 'Enter');
+    assert.equal(await activeLabel(page), 'div|View', 'View is the first menu item for a photo');
+    await page.screenshot({path: path.join(outDir, 'media-2-photo-menu.png')});
+    await press(page, 'Enter');
+    await page.waitForURL(/\/photo\//);
+    await page.waitForFunction(() => document.querySelector('.photo-image')?.naturalWidth > 0, null, {timeout: 8000});
+    const requests = await fetch(`${MOCK}/__mock/media-requests`).then(response => response.json());
+    assert.equal(requests.length, 1, 'media downloaded once, on open');
+    assert.equal(requests[0].key.remoteJid, FAMILY);
+    await page.screenshot({path: path.join(outDir, 'media-3-photo.png')});
+    await press(page, 'Escape');
+    await page.waitForURL(`**/chat/${encodeURIComponent(FAMILY)}`);
+    await waitForFocus(page, /Photo: Olha isso/);
+
+    // Download failure: error copy and Try again
+    await mockPost('/__mock/reset', {mediaFails: true});
+    // Reloading drops the in-memory copy of the photo already opened.
+    await page.reload();
+    await waitForText(page, 'Photo: Olha isso');
+    await page.waitForTimeout(800);
+    await press(page, 'ArrowDown');
+    await press(page, 'ArrowLeft');
+    await pressUntil(page, 'ArrowUp', /Photo: Olha isso/);
+    await press(page, 'Enter');
+    await press(page, 'Enter');
+    await waitForText(page, "Couldn't load the photo");
+    await waitForText(page, 'rejected by the server');
+    await page.screenshot({path: path.join(outDir, 'media-4-photo-error.png')});
+    await pressUntil(page, 'ArrowDown', /Try again/);
+    await press(page, 'Escape');
+    await page.waitForURL(`**/chat/${encodeURIComponent(FAMILY)}`);
+
+    // Ana's voice message: Enter plays and pauses
+    await mockPost('/__mock/reset');
+    await page.goto(`${APP}/chat/${encodeURIComponent(ANA)}`);
+    await waitForText(page, '0:07');
+    await page.waitForTimeout(800);
+    await press(page, 'ArrowDown');
+    await press(page, 'ArrowLeft');
+    await pressUntil(page, 'ArrowUp', /Voice message/, 10);
+    await press(page, 'Enter');
+    if (audioOutput) {
+      await waitForFocus(page, /Playing, 0:0[1-6] of 0:0[67]/, 6000);
+      await page.screenshot({path: path.join(outDir, 'media-5-audio-playing.png')});
+      await press(page, 'Enter');
+      await waitForFocus(page, /Paused, /);
+    }
+    const audioRequest = (await fetch(`${MOCK}/__mock/media-requests`).then(response => response.json())).at(-1);
+    assert.equal(audioRequest.convertToMp4, false, 'OGG/Opus plays as is');
+    assert.deepEqual(problems, []);
   } finally {
     await context.close();
   }
@@ -510,7 +672,8 @@ async function run() {
         await test(`[${name}] list, thread actions, Reply field, bubble menu (reaction + quoted reply), polling, Back`, () => mainFlow(browser, name));
 
         await test(`[${name}] demo mode: capture script, fictional chats only, no requests, storage untouched`, async () => {
-          const {blocked} = await demoFlow(browser, name);
+          // The sandbox has no audio output for Firefox; it decodes but cannot play (see the Opus test).
+          const {blocked} = await demoFlow(browser, name, APP, {audioOutput: name !== 'firefox'});
           console.log(`     blocked (Toolkit font only): ${JSON.stringify(blocked)}`);
         });
 
@@ -671,6 +834,30 @@ async function run() {
           );
         } finally {
           await context.close();
+        }
+      });
+
+      await test('[chromium] profile pictures, full-screen photo (View, Back, failure) and voice playback', () =>
+        mediaFlow(browser, {audioOutput: true}));
+
+      await test('[firefox] OGG/Opus voice note decodes (no audio output in this sandbox)', async () => {
+        const gecko = await firefox.launch();
+        try {
+          const page = await gecko.newPage();
+          await page.goto(`${MOCK}/__mock/files/voice-note.ogg`).catch(() => {});
+          const result = await page.evaluate(async url => {
+            const blob = new Blob([await (await fetch(url)).arrayBuffer()], {type: 'audio/ogg'});
+            const audio = new Audio(URL.createObjectURL(blob));
+            await new Promise((resolve, reject) => {
+              audio.addEventListener('loadedmetadata', resolve);
+              audio.addEventListener('error', () => reject(new Error(`media error ${audio.error?.code}`)));
+            });
+            return {duration: audio.duration, canPlay: audio.canPlayType('audio/ogg; codecs=opus')};
+          }, `${MOCK}/__mock/files/voice-note.ogg`);
+          assert.equal(result.canPlay, 'probably');
+          assert.ok(Math.abs(result.duration - 6) < 0.1, `duration ${result.duration}`);
+        } finally {
+          await gecko.close();
         }
       });
 

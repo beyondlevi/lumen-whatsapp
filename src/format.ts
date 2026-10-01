@@ -35,19 +35,63 @@ export function chatDisplayName(jid: string, name: string | null | undefined): s
   return name ?? phoneFromJid(jid) ?? t('unknownContact');
 }
 
-export function chatPreview(chat: Chat): string {
-  const message = chat.lastMessage;
-  if (!message) {
-    return t('markerNoPreview');
-  }
+const SNIPPET_LENGTH = 24;
+
+/** Short quote of a message text, cut on a character boundary. */
+export function snippet(text: string, length: number = SNIPPET_LENGTH): string {
+  const chars = Array.from(text);
+  return chars.length > length ? `${chars.slice(0, length - 1).join('').trimEnd()}…` : text;
+}
+
+function firstName(name: string): string {
+  return name.split(' ')[0];
+}
+
+function messagePreview(chat: Chat, message: ChatMessage): string {
   const text = describeContent(message.content);
   if (message.fromMe) {
     return t('senderPrefix', {sender: t('you'), text});
   }
   if (chat.isGroup && message.senderName) {
-    return t('senderPrefix', {sender: message.senderName.split(' ')[0], text});
+    return t('senderPrefix', {sender: firstName(message.senderName), text});
   }
   return text;
+}
+
+/**
+ * List preview. A reaction is never shown as a message: your own reaction, or
+ * a removed one, previews the newest real message; someone else's reads
+ * "Reacted ❤️ to “…”" (with the sender's name in a group).
+ * `loaded` is the conversation as far as it is known (oldest first).
+ */
+export function chatPreview(chat: Chat, loaded: ChatMessage[] = []): string {
+  const message = chat.lastMessage;
+  if (!message) {
+    return t('markerNoPreview');
+  }
+  if (message.content.kind !== 'reaction') {
+    return messagePreview(chat, message);
+  }
+  const real = [...loaded].reverse().find(candidate => candidate.content.kind !== 'reaction');
+  const emoji = message.content.text;
+  if (message.fromMe || !emoji) {
+    if (real) {
+      return messagePreview(chat, real);
+    }
+    return emoji ? t('youReacted', {emoji}) : t('markerNoPreview');
+  }
+  const target = loaded.find(candidate => candidate.id === message.content.targetId);
+  const quote = target ? snippet(describeContent(target.content)) : null;
+  const text = quote ? t('reactedTo', {emoji, text: quote}) : t('reacted', {emoji});
+  return chat.isGroup && message.senderName
+    ? t('senderPrefix', {sender: firstName(message.senderName), text})
+    : text;
+}
+
+/** "0:09", "1:05": a duration or position in minutes and seconds. */
+export function formatDuration(seconds: number): string {
+  const total = Math.max(0, Math.floor(seconds));
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
 }
 
 export function initials(name: string): string {

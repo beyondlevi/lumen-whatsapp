@@ -59,7 +59,7 @@ describe('parseMessages (Evolution v2 findMessages)', () => {
     const messages = parseMessages(findMessages);
     expect(messages.map(message => message.content.kind)).toEqual(['audio', 'text', 'reaction', 'text']);
     expect(messages[1]).toMatchObject({fromMe: true, senderName: null});
-    expect(messages[2].content).toEqual({kind: 'reaction', text: '👍'});
+    expect(messages[2].content).toEqual({kind: 'reaction', text: '👍', targetId: '3EB0DEADBEEF0000000002'});
     expect(messages[3]).toMatchObject({fromMe: false, senderName: 'Ana Souza', timestamp: 1759151112000});
   });
 
@@ -99,6 +99,10 @@ describe('parseContent', () => {
 
   it('skips non-chat records', () => {
     expect(parseContent({reactionMessage: {text: ''}})).toBeNull();
+    // A removed reaction is kept (empty emoji) so it can clear an earlier one.
+    expect(parseContent({reactionMessage: {key: {id: 'M1'}, text: ''}})).toEqual({kind: 'reaction', text: '', targetId: 'M1'});
+    expect(parseContent({audioMessage: {seconds: 7, ptt: true}})).toEqual({kind: 'audio', text: '', seconds: 7});
+    expect(parseContent({audioMessage: {ptt: true}})).toEqual({kind: 'audio', text: ''});
     expect(parseContent({protocolMessage: {type: 'EPHEMERAL_SETTING'}})).toBeNull();
     expect(parseContent({senderKeyDistributionMessage: {}})).toBeNull();
   });

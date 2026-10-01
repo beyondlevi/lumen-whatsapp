@@ -1,15 +1,23 @@
 // Demo mode stand-in for EvolutionClient. Answers with Evolution API v2 shaped
 // payloads built from the fictional chats in demoData, so the app parses and
 // renders them exactly like server data. Never calls fetch and never touches
-// storage: every launch starts from the same chats.
+// storage: every launch starts from the same chats. Pictures and the voice note
+// are files inside the package; the app loads them like any other image/audio.
 
-import type {EvolutionApi, MessageKeyRef} from '../evolution/client';
+import {EvolutionError, type EvolutionApi, type MediaPayload, type MessageKeyRef} from '../evolution/client';
 import {DEMO_DAY_END, demoChats, type DemoChat, type DemoMessage} from './demoData';
 
 /** Time the "Sending" state stays on screen. */
 const SEND_DELAY_MS = 600;
 /** Delay before a chat's scripted answer to your first reply. */
 const AUTO_REPLY_DELAY_MS = 2500;
+/** Time the photo/voice "download" spinner stays on screen. */
+const MEDIA_DELAY_MS = 700;
+
+/** Absolute URL of a packaged asset (data URIs stay as they are). */
+function assetUrl(url: string): string {
+  return typeof location === 'undefined' ? url : new URL(url, location.href).href;
+}
 
 type StoredMessage = Omit<DemoMessage, 'daysAgo' | 'time'> & {timestamp: number};
 type StoredChat = Omit<DemoChat, 'messages'> & {messages: StoredMessage[]; autoReplied: boolean};
@@ -75,6 +83,7 @@ export function createDemoClient(): EvolutionApi {
             id: `chat-${chat.jid}`,
             remoteJid: chat.jid,
             ...(chat.name ? (isGroup ? {name: chat.name} : {pushName: chat.name}) : {}),
+            profilePicUrl: chat.avatar?.inList ? assetUrl(chat.avatar.url) : null,
             unreadCount: chat.unreadCount,
             updatedAt: new Date((last?.timestamp ?? dayEnd) * 1000).toISOString(),
             lastMessage: last ? record(chat, last) : null,
@@ -125,10 +134,25 @@ export function createDemoClient(): EvolutionApi {
     async sendReaction(key: MessageKeyRef, reaction: string) {
       await wait(SEND_DELAY_MS / 2);
       const chat = chatFor(key.remoteJid);
-      if (chat) {
-        add(chat, {fromMe: true, messageType: 'reactionMessage', message: {reactionMessage: {key, text: reaction}}});
+      if (!chat) {
+        return {status: 'PENDING'};
       }
-      return {status: 'PENDING'};
+      const sent = add(chat, {fromMe: true, messageType: 'reactionMessage', message: {reactionMessage: {key, text: reaction}}});
+      return {...record(chat, sent), status: 'PENDING'};
+    },
+
+    async fetchProfilePictureUrl(jid: string) {
+      const avatar = chatFor(jid)?.avatar;
+      return avatar ? assetUrl(avatar.url) : null;
+    },
+
+    async getMediaMessage(key: MessageKeyRef): Promise<MediaPayload> {
+      await wait(MEDIA_DELAY_MS);
+      const media = chatFor(key.remoteJid)?.messages.find(message => message.id === key.id)?.media;
+      if (!media) {
+        throw new EvolutionError('rejected', 400, 'The message is not of the media type');
+      }
+      return {mimetype: media.mimetype, url: assetUrl(media.url)};
     },
 
     async markMessagesAsRead(keys: MessageKeyRef[]) {

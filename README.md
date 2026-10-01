@@ -5,20 +5,40 @@ WhatsApp client for **Rokid Lumen** glasses, built as a Meta Ray-Ban Display (MR
 backed by an [Evolution API v2](https://github.com/EvolutionAPI/evolution-api) server. The screens follow the
 toolkit's messaging example (`examples/messaging`).
 
-- **Chats**: name, preview, and time for the 40 most recent chats. Unread chats have an unread dot on the
-  avatar and an accent-colored time. The last list and the 30 most recent messages of up to 20 chats are
+- **Chats**: profile picture, name, preview, and time for the 40 most recent chats. Unread chats have an
+  unread dot on the avatar and an accent-colored time. The last list and the 30 most recent messages of up to 20 chats are
   cached in localStorage (never the API key). On launch the cached list shows at once, and the header
   shows a spinner with “Loading…” until the first refresh arrives.
-- **Conversation**: the 30 most recent messages. Voice notes, photos, videos, stickers, documents,
-  locations, contacts, polls, and reactions show only a marker (“Audio”, “Photo”, “Reaction 👍”…).
+- **Conversation**: the 30 most recent messages, starting below the header (nothing runs under the name
+  chip), with the chat's picture in the header. Videos, stickers, documents, locations, contacts and polls
+  show a marker (“Video”, “Document: …”).
+- **Photos**: Enter on a photo opens its menu with **View** first. View downloads the photo
+  (`getBase64FromMediaMessage`) and shows it full screen on the dark window background, with a loader
+  while it downloads and an error with **Try again** if it fails. Back returns to the same bubble.
+- **Voice messages**: the bubble shows the length; Enter plays or pauses it, with the position and a
+  progress bar. The audio is downloaded on the first play. WhatsApp voice notes are OGG/Opus, which
+  `<audio>` plays in GeckoView and in Chromium; if `canPlayType` says no, the app asks the server for MP4
+  (`convertToMp4`). One message plays at a time and playback stops when the conversation closes. Because
+  Enter plays, voice messages have no reaction/reply menu.
+- **Reactions**: a reaction is never a bubble. Each message shows a badge under its bottom-right corner
+  with the emojis people reacted with and, from 2 on, the count (the latest reaction of each person
+  counts; an empty one removes it). This covers reactions from the server (`reactionMessage` records
+  pointing at the message's key) and your own, which show at once.
+- **Previews**: when the newest record of a chat is a reaction, the list shows the newest real message if
+  the reaction is yours (or was removed), and “Reacted ❤️ to “…”” for someone else's (“Reacted ❤️” when
+  the message is not loaded yet; with the sender's first name in groups).
+- **Profile pictures**: from `profilePicUrl` in `findChats` when the server has it, otherwise one
+  `fetchProfilePictureUrl` per chat (two at a time), cached in localStorage (`lumen-whatsapp.avatars.v1`,
+  24 h; “no picture” 6 h). A picture is shown only after it loads; otherwise the initials (or a
+  person/group icon) stay.
 - **Conversation actions**: a bottom rail with Reply, Voice and Photos (disabled: web apps have no
-  microphone or media access), and Hide/Show tails, as in the toolkit's messaging example.
+  microphone or media access).
 - **Reply**: the text field (the toolkit's `InputTextView`, a real `<textarea>`) appears only after Reply,
   as its own history entry, so Back closes it and focus returns to Reply. On the glasses, Enter on the
   field opens the platform's dictation composer, and the text arrives through `input`/`change` events.
   Right then moves to Send. After sending, the field closes.
-- **Message menu**: Enter on a bubble opens a toolkit `ContextMenu` anchored to it, with four reactions
-  (👍 ❤️ 😂 😭) and Reply, which opens the field quoting that message. Back closes the menu and returns
+- **Message menu**: Enter on a bubble opens a toolkit `ContextMenu` anchored to it, with View (photos
+  only), four reactions (👍 ❤️ 😂 😭) and Reply, which opens the field quoting that message. Back closes the menu and returns
   focus to the bubble.
 
   `InputTextView` handles Enter in its own `keydown` handler, calling `preventDefault()` and
@@ -44,7 +64,10 @@ The app uses only arrow keys, Enter, and Escape (the Neural Band / Rokid gesture
 | Reply field | Right, then Enter | Send (the path to use on the glasses after dictating); the field closes |
 | Reply field | Escape | Closes the field, back to Reply |
 | Conversation | Enter on a bubble | Opens the message menu |
-| Message menu | Left / Right, Enter | Pick 👍 ❤️ 😂 😭 (sends the reaction) or Reply (quoted reply) |
+| Conversation | Enter on a voice message | Plays / pauses it |
+| Message menu | Left / Right, Enter | Pick View (photos), 👍 ❤️ 😂 😭 (sends the reaction) or Reply (quoted reply) |
+| Photo | Escape | Back to the conversation, on the same bubble |
+| Photo error | Enter on “Try again” | Downloads the photo again |
 | Message menu | Escape | Closes the menu, back to the bubble |
 | Conversation | Escape | Back to the chat list, with the same chat focused |
 | Error screens | Enter on “Try again” | Reconnects |
@@ -60,7 +83,7 @@ Credentials are never bundled and never typed on the glasses. The phone companio
   {"key": "evolution.url", "label": "Evolution server URL", "type": "url"},
   {"key": "evolution.instance", "label": "Instance", "type": "text"},
   {"key": "evolution.apiKey", "label": "API key", "type": "secret"},
-  {"key": "demo", "label": "Demo mode (screenshots)", "type": "text"}
+  {"key": "demo", "label": "Demo mode (screenshots)", "type": "text", "optional": true}
 ],
 "lumen_internet": true
 ```
@@ -78,7 +101,8 @@ returns a function, the app uses it to unsubscribe. See `src/config/lumenConfig.
 
 ### Demo mode
 
-For screenshots and videos, set the **Demo mode (screenshots)** field to exactly `demo-captures` (surrounding
+The field is marked `"optional": true`, so the companion does not ask for it (older Lumen versions ignore
+the flag). For screenshots and videos, set the **Demo mode (screenshots)** field to exactly `demo-captures` (surrounding
 spaces are ignored; any other value, including `demo`, `yes` or a different case, is ignored). The Evolution
 fields can stay filled in. The change applies at once, even with the app open. Clear the field to go back to
 the server.
@@ -90,8 +114,14 @@ In demo mode:
 - `src/demo/demoClient.ts` answers with Evolution-shaped payloads, so the same parsing and screens run. It
   never calls `fetch`. Sending takes 0.6 s; Maya Chen and Sam Rivera answer your first reply once, after about
   2.5 s plus the next poll;
-- the app reads and writes no storage. The chat cache, the read marks and the development config are left as
-  they are, and every launch starts from the same unread chats;
+- it covers stacked reactions (Hike Crew: 👍👍❤️; Maya's 👍 on your message; Sam's ❤️ as the list preview),
+  profile pictures (from the list for Maya and Hike Crew, on request for Sam and Bike Shop, initials for
+  Jordan Lee, an icon for the unknown number), two photos to View and a 6 s voice note to play;
+- pictures and the voice note are generated by `scripts/generate-demo-media.mjs` (abstract shapes, dark
+  backgrounds for the additive display, a synthesized tone melody in OGG/Opus) and ship inside the package
+  (`src/demo/assets`). The app reads them from its own origin when they are viewed or played;
+- the app reads and writes no storage. The chat cache, the read marks, the picture cache and the development
+  config are left as they are, and every launch starts from the same unread chats;
 - the copy is in English whatever the device language.
 
 The only request outside the package origin is the Toolkit's Noto Sans stylesheet
@@ -121,6 +151,8 @@ The instance name is a path segment encoded with `encodeURIComponent`, so a spac
 | `POST /message/sendText/{instance}` | `{"number": "<jid>", "text": "…"}`, plus `"quoted": {"key": {"id", "fromMe", "remoteJid"}, "message": {"conversation": "…"}}` when replying to a message | 201, the sent message (`key`, `messageTimestamp`, `status: "PENDING"`) |
 | `POST /message/sendReaction/{instance}` | `{"key": {"id", "fromMe", "remoteJid", "participant"?}, "reaction": "👍"}` (`participant` for group messages) | 201; failures show a Toast |
 | `POST /chat/markMessageAsRead/{instance}` | `{"readMessages": [{"id", "fromMe": false, "remoteJid"}]}` (up to 30) | 201; failures are ignored |
+| `POST /chat/fetchProfilePictureUrl/{instance}` | `{"number": "<jid>"}` (contacts and groups) | 200, `{wuid, profilePictureUrl}`; `null` when there is none or it is private |
+| `POST /chat/getBase64FromMediaMessage/{instance}` | `{"message": {"key": {"id", "fromMe", "remoteJid"}}, "convertToMp4": false}` | 201, `{mediaType, fileName, mimetype, base64, …}`; 400 when the download fails. The server looks the message up by key and retries a failed download once after 5 s, so the app waits up to 30 s |
 
 `status@broadcast`, `@broadcast` and `@newsletter` chats are hidden.
 
@@ -160,7 +192,10 @@ so the app shows “Can't reach the server”.
   chat, in localStorage, so an opened chat stops being highlighted even if the server count lags.
 - **No WebSocket:** only polling is used. Evolution's Socket.io is optional and may later replace the
   3 s / 5 s polling.
-- **Media is not shown:** no media is downloaded or played; messages show only their marker.
+- **Media:** only photos (View) and voice/audio messages (play) are downloaded. Videos, stickers and
+  documents keep their marker. Downloads live in memory for the session (the last 6) and are never stored.
+- **Profile pictures** are WhatsApp CDN URLs (`pps.whatsapp.net`) loaded with `<img>`, so they need the
+  phone's internet like the rest of the app, and expire after a while (hence the 24 h cache).
 
 ## Development
 
@@ -213,6 +248,10 @@ calls to the mock. It covers:
 - the `window.lumen.config` contract (`get` and `onChange`);
 - pt-PT;
 - the unzipped `.mrbd.zip` with every other origin blocked;
+- profile pictures (from `findChats`, from `fetchProfilePictureUrl`, a broken URL keeping the initials, and
+  the cache on the next launch), the full-screen photo (View first, Back to the same bubble, failure with
+  Try again), voice playback (Chromium; Firefox has no audio output in this sandbox, so a separate test
+  checks that Gecko decodes the OGG/Opus note), and reactions as badges, never bubbles;
 - demo mode: the capture script key by key, in Chromium, Firefox and the unzipped package, with every
   request outside the app blocked and sentinel "real" data in storage. The test checks that none of that
   data appears on screen and that storage is left unchanged. It also switches demo mode on and off while

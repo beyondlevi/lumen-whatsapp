@@ -1,7 +1,4 @@
-import circleUserFilled from '@wearables-ui-toolkit/icons/svg/circleuser__filled.svg';
-import circleUserStackFilled from '@wearables-ui-toolkit/icons/svg/circleuserstack__filled.svg';
 import {
-  IconImage,
   ListItem,
   Page,
   StatusIndicatorType,
@@ -9,8 +6,10 @@ import {
   TimestampTextColor,
   VerticalList,
 } from '@wearables-ui-toolkit/mrbd';
+import {useEffect} from 'react';
 import {useNavigate} from 'react-router-dom';
-import {chatDisplayName, chatPreview, formatListTime, initials} from '../format';
+import {avatarFallback} from '../components/avatarFallback';
+import {chatDisplayName, chatPreview, formatListTime} from '../format';
 import {t} from '../i18n/strings';
 import {useReturnOrder} from '../state/useReturnOrder';
 import {useWhatsApp} from '../WhatsAppProvider';
@@ -23,9 +22,16 @@ export function chatPath(jid: string): string {
 
 export function ChatListPage() {
   const navigate = useNavigate();
-  const {phase, chats, offline, syncing, isUnread, listOrder} = useWhatsApp();
+  const {phase, chats, offline, syncing, isUnread, listOrder, thread, avatarFor, requestAvatar} = useWhatsApp();
 
   const rows = useReturnOrder(chats, listOrder);
+
+  // Profile pictures load once per chat while the list is shown.
+  useEffect(() => {
+    for (const chat of rows) {
+      requestAvatar(chat.jid, chat.avatarUrl);
+    }
+  }, [requestAvatar, rows]);
 
   if (phase.kind !== 'ready') {
     return <StatusPage phase={phase} />;
@@ -44,20 +50,17 @@ export function ChatListPage() {
         {rows.map(chat => {
           const name = chatDisplayName(chat.jid, chat.name);
           const unread = isUnread(chat);
-          const avatar = chat.name ? (
-            initials(chat.name)
-          ) : (
-            <IconImage source={chat.isGroup ? circleUserStackFilled : circleUserFilled} />
-          );
+          const picture = avatarFor(chat.jid);
           return (
             <ListItem
               key={chat.jid}
               title={name}
-              subtitle={chatPreview(chat)}
+              subtitle={chatPreview(chat, thread(chat.jid).messages)}
               timestamp={formatListTime(chat.timestamp)}
               timestampPosition={TimestampPosition.ACCESSORY_TOP}
               timestampTextColor={unread ? TimestampTextColor.ACCENT : TimestampTextColor.PRIMARY}
-              avatarPrimaryContent={avatar}
+              avatarSrc={picture ?? undefined}
+              avatarPrimaryContent={picture ? undefined : avatarFallback(chat.name, chat.isGroup)}
               avatarAlt={name}
               avatarStatusIndicator={unread ? StatusIndicatorType.UNREAD : undefined}
               onClick={() => navigate(chatPath(chat.jid))}

@@ -10,37 +10,23 @@ import {
   Toast,
   VerticalList,
   type ButtonHandle,
+  type PageHandle,
 } from '@wearables-ui-toolkit/mrbd';
-import {useCallback, useEffect, useLayoutEffect, useRef, useState, type FocusEvent} from 'react';
+import {useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type FocusEvent} from 'react';
 import {Navigate, useLocation, useNavigate, useParams} from 'react-router-dom';
+import {avatarFallback} from '../components/avatarFallback';
 import {MessageBubble} from '../components/MessageBubble';
-import type {EvolutionErrorKind} from '../evolution/client';
 import {isGroupJid, type ChatMessage} from '../evolution/parse';
-import {chatDisplayName, describeContent, endsMessageRun, startsMessageRun} from '../format';
-import {t, type StringKey} from '../i18n/strings';
+import {failureReason} from '../failure';
+import {chatDisplayName, describeContent, endsMessageRun, snippet, startsMessageRun} from '../format';
+import {t} from '../i18n/strings';
+import {splitReactions} from '../reactions';
+import {useAudioPlayer} from '../state/useAudioPlayer';
 import {useWhatsApp} from '../WhatsAppProvider';
 import {StatusPage} from './StatusPage';
 
-const FAILURE_REASONS: Record<EvolutionErrorKind, StringKey> = {
-  network: 'reasonNetwork',
-  auth: 'reasonAuth',
-  instance: 'reasonInstance',
-  rejected: 'reasonRejected',
-  server: 'reasonServer',
-};
-
-const QUOTE_SNIPPET_LENGTH = 24;
-
-function snippet(text: string): string {
-  const chars = Array.from(text);
-  return chars.length > QUOTE_SNIPPET_LENGTH
-    ? `${chars.slice(0, QUOTE_SNIPPET_LENGTH - 1).join('').trimEnd()}…`
-    : text;
-}
-
-function failureReason(error: unknown): string {
-  const kind = error instanceof Error && 'kind' in error ? String(error.kind) : '';
-  return t(kind in FAILURE_REASONS ? FAILURE_REASONS[kind as EvolutionErrorKind] : 'reasonServer');
+export function photoPath(jid: string, messageId: string): string {
+  return `/chat/${encodeURIComponent(jid)}/photo/${encodeURIComponent(messageId)}`;
 }
 
 export function ThreadPage() {
@@ -56,21 +42,49 @@ export function ThreadPage() {
   return <Thread jid={jid} />;
 }
 
+/** Header height, measured once laid out and on resize; 0 until known. */
+function useHeaderHeight(pageRef: {current: PageHandle | null}): number {
+  const [height, setHeight] = useState(0);
+  useLayoutEffect(() => {
+    const measure = () => setHeight(pageRef.current?.getHeaderHeight() ?? 0);
+    measure();
+    const frame = window.requestAnimationFrame(measure);
+    window.addEventListener('resize', measure);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener('resize', measure);
+    };
+  }, [pageRef]);
+  return height;
+}
+
 function Thread({jid}: {jid: string}) {
-  const {chatFor, thread, openThread, sendText, sendReaction, offline} = useWhatsApp();
+  const {chatFor, thread, openThread, sendText, sendReaction, offline, avatarFor, requestAvatar, loadMedia} =
+    useWhatsApp();
   const location = useLocation();
   const navigate = useNavigate();
   const chat = chatFor(jid);
   const name = chatDisplayName(jid, chat?.name);
-  const {loaded, synced, messages} = thread(jid);
+  const {loaded, synced, messages: records} = thread(jid);
   const isGroup = chat?.isGroup ?? isGroupJid(jid);
+  const {messages, reactions} = useMemo(() => splitReactions(records), [records]);
+  const avatar = avatarFor(jid);
+
+  useEffect(() => requestAvatar(jid, chat?.avatarUrl), [chat?.avatarUrl, jid, requestAvatar]);
 
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
-  const [tails, setTails] = useState(true);
   // Message chosen with the bubble menu's Reply; sent as a quoted reply.
   const [quoted, setQuoted] = useState<ChatMessage | null>(null);
   const replyButtonRef = useRef<ButtonHandle>(null);
+  const pageRef = useRef<PageHandle>(null);
+  const headerHeight = useHeaderHeight(pageRef);
+
+  const showAudioError = useCallback(
+    (error: unknown) => Toast.show(t('audioFailed', {reason: error instanceof Error && error.message === 'decode' ? t('reasonFormat') : failureReason(error)})),
+    [],
+  );
+  const [audio, toggleAudio] = useAudioPlayer(loadMedia, showAudioError);
 
   const composerOpen =
     location.state != null &&
@@ -97,7 +111,7 @@ function Thread({jid}: {jid: string}) {
     [composerOpen, location.pathname, navigate],
   );
   const startReply = useCallback(() => openComposer(null), [openComposer]);
-  const toggleTails = useCallback(() => setTails(current => !current), []);
+  const viewPhoto = useCallback((message: ChatMessage) => navigate(photoPath(jid, message.id)), [jid, navigate]);
 
   const react = useCallback(
     (message: ChatMessage, emoji: string) => {
@@ -179,13 +193,21 @@ function Thread({jid}: {jid: string}) {
 
   return (
     <Page
+      ref={pageRef}
       headerText={name}
+      headerShowAvatar
+      headerAvatarSrc={avatar ?? undefined}
+      headerAvatarPrimaryContent={avatar ? undefined : avatarFallback(chat?.name, isGroup)}
+      headerAvatarAlt={name}
       headerIsLoading={!synced}
       headerMetadata={offline && synced ? t('offlineMeta') : undefined}
       enableSystemBarInset={false}>
-      <div className="thread-shell">
+      {/* The conversation starts below the header so no message runs under it. */}
+      <div
+        className={headerHeight > 0 ? 'thread-shell thread-shell--below-header' : 'thread-shell'}
+        style={headerHeight > 0 ? ({'--thread-header-height': `${headerHeight}px`} as CSSProperties) : undefined}>
         <VerticalList
-          insetForHeader
+          insetForHeader={headerHeight === 0}
           contentClassName="message-list"
           ariaLabel={t('threadLabel', {name})}>
           {loaded && messages.length === 0 ? (
@@ -204,10 +226,13 @@ function Thread({jid}: {jid: string}) {
               message={message}
               showSender={isGroup && !message.fromMe && startsMessageRun(messages, index)}
               endsRun={endsMessageRun(messages, index)}
-              tails={tails}
               initialFocusEligible={!composerOpen && index === messages.length - 1}
+              reactions={reactions.get(message.id)}
+              audio={audio.id === message.id ? audio : undefined}
               onReact={react}
               onReply={openComposer}
+              onView={viewPhoto}
+              onToggleAudio={toggleAudio}
             />
           ))}
           <div className="message-end" ref={endRef} />
@@ -232,7 +257,7 @@ function Thread({jid}: {jid: string}) {
               />
             </div>
           ) : (
-            <ButtonRail centerContentWhenSmallerThanWidth={false} anchorIndex={1}>
+            <ButtonRail centerContentWhenSmallerThanWidth={false}>
               <Button
                 ref={replyButtonRef}
                 title={t('replyAction')}
@@ -241,11 +266,6 @@ function Thread({jid}: {jid: string}) {
               />
               <Button title={t('voiceAction')} icon={microphoneFilled} disabled initialFocusEligible={false} />
               <Button title={t('photosAction')} icon={imageFilled} disabled initialFocusEligible={false} />
-              <Button
-                title={tails ? t('hideTails') : t('showTails')}
-                initialFocusEligible={false}
-                onClick={toggleTails}
-              />
             </ButtonRail>
           )}
         </div>

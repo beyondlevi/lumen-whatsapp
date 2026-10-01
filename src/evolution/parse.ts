@@ -18,8 +18,12 @@ export type ContentKind =
 
 export type MessageContent = {
   kind: ContentKind;
-  /** Body for text, caption/title for media markers, emoji for reactions. */
+  /** Body for text, caption/title for media markers, emoji for reactions (empty when removed). */
   text: string;
+  /** Reactions: id of the message reacted to. */
+  targetId?: string;
+  /** Audio: length in seconds, when the message carries it. */
+  seconds?: number;
 };
 
 export type ChatMessage = {
@@ -45,6 +49,8 @@ export type Chat = {
   lastMessage: ChatMessage | null;
   /** Epoch milliseconds of the latest activity, when known. */
   timestamp: number | null;
+  /** Profile picture URL from findChats (`profilePicUrl`), when the server has one. */
+  avatarUrl?: string;
 };
 
 export type ContactNames = Map<string, string>;
@@ -154,8 +160,10 @@ export function parseContent(messageValue: unknown, messageType?: unknown): Mess
   if (video) {
     return {kind: 'video', text: asString(video.caption) ?? ''};
   }
-  if (part('audioMessage')) {
-    return {kind: 'audio', text: ''};
+  const audioPart = part('audioMessage');
+  if (audioPart) {
+    const seconds = typeof audioPart.seconds === 'number' && audioPart.seconds > 0 ? audioPart.seconds : undefined;
+    return seconds ? {kind: 'audio', text: '', seconds} : {kind: 'audio', text: ''};
   }
   if (part('stickerMessage')) {
     return {kind: 'sticker', text: ''};
@@ -185,9 +193,13 @@ export function parseContent(messageValue: unknown, messageType?: unknown): Mess
   }
   const reaction = part('reactionMessage');
   if (reaction) {
-    const emoji = asString(reaction.text);
+    const targetId = asString(asObject(reaction.key)?.id);
     // An empty reaction text means the reaction was removed.
-    return emoji ? {kind: 'reaction', text: emoji} : null;
+    const emoji = asString(reaction.text) ?? '';
+    if (!targetId) {
+      return emoji ? {kind: 'reaction', text: emoji} : null;
+    }
+    return {kind: 'reaction', text: emoji, targetId};
   }
   const protocol = part('protocolMessage');
   if (protocol) {
@@ -287,8 +299,17 @@ export function parseChats(value: unknown, contacts?: ContactNames): Chat[] {
       (!isGroup && lastMessage && !lastMessage.fromMe ? lastMessage.senderName : null);
     const unread = typeof raw.unreadCount === 'number' && raw.unreadCount > 0 ? raw.unreadCount : 0;
     const timestamp = lastMessage?.timestamp ?? toMillis(raw.updatedAt);
+    const avatarUrl = asString(raw.profilePicUrl);
     if (!byJid.has(jid)) {
-      byJid.set(jid, {jid, name, isGroup, unreadCount: unread, lastMessage, timestamp});
+      byJid.set(jid, {
+        jid,
+        name,
+        isGroup,
+        unreadCount: unread,
+        lastMessage,
+        timestamp,
+        ...(avatarUrl && /^https?:|^data:image\//.test(avatarUrl) ? {avatarUrl} : {}),
+      });
     }
   }
   return [...byJid.values()].sort((a, b) => (b.timestamp ?? 0) - (a.timestamp ?? 0));

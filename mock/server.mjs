@@ -13,7 +13,16 @@
 //   POST /__mock/incoming           {remoteJid, text, pushName?}  deliver a new message
 //   GET  /__mock/sent               messages sent through sendText
 //   GET  /__mock/reactions          reactions sent through sendReaction
+//   GET  /__mock/media-requests     keys asked from getBase64FromMediaMessage
+//   GET  /__mock/files/<name>       profile pictures (files from src/demo/assets)
+// fetchProfilePictureUrl and getBase64FromMediaMessage serve the fictional
+// demo assets; reset with {mediaFails: true} makes media downloads fail (400).
+import fs from 'node:fs';
 import http from 'node:http';
+import path from 'node:path';
+
+const ASSETS = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../src/demo/assets');
+const FILE_TYPES = {'.webp': 'image/webp', '.ogg': 'audio/ogg'};
 
 export const MOCK_INSTANCE = 'Lumen Test';
 export const MOCK_API_KEY = 'mock-api-key';
@@ -21,6 +30,7 @@ const INSTANCE_ID = 'a1b2c3d4-0000-4000-8000-000000000001';
 
 let state;
 let downUntil = 0;
+let mediaFails = false;
 let idCounter = 0;
 
 function nextId(prefix) {
@@ -56,13 +66,14 @@ function seed() {
   const diego = '5511999990005@s.whatsapp.net';
   const lid = '123456789012345@lid';
   const bruno = '5511999990002@s.whatsapp.net';
+  const combinado = record({remoteJid: ana, fromMe: true, secondsAgo: 3600, status: 'READ', ...text('Combinado, até amanhã')});
   const messages = [
     // Ana: two unread texts, reaction and voice note.
     record({remoteJid: ana, fromMe: false, pushName: 'Ana Souza', secondsAgo: 7200, messageType: 'audioMessage',
       message: {audioMessage: {url: 'https://mmg.whatsapp.net/v/t62.7117-24/000_n.enc', mimetype: 'audio/ogg; codecs=opus', seconds: 7, ptt: true}}}),
-    record({remoteJid: ana, fromMe: true, secondsAgo: 3600, status: 'READ', ...text('Combinado, até amanhã')}),
+    combinado,
     record({remoteJid: ana, fromMe: false, pushName: 'Ana Souza', secondsAgo: 3500, messageType: 'reactionMessage',
-      message: {reactionMessage: {key: {id: '3EB0DEADBEEF0000000002', fromMe: true, remoteJid: ana}, text: '👍'}}}),
+      message: {reactionMessage: {key: {id: combinado.key.id, fromMe: true, remoteJid: ana}, text: '👍'}}}),
     record({remoteJid: ana, fromMe: false, pushName: 'Ana Souza', secondsAgo: 240, ...text('Oi! Tudo certo para amanhã?')}),
     record({remoteJid: ana, fromMe: false, pushName: 'Ana Souza', secondsAgo: 180, ...text('Levo o projetor')}),
     // Family group: photo from Bruno, read.
@@ -92,11 +103,19 @@ function seed() {
   ];
   // Chat.name (returned as pushName by findChats on v2.3.x): null for Carla and Diego.
   const chatNames = {[ana]: 'Ana Souza', [family]: 'Família'};
-  return {messages, contacts, chatNames, sent: [], reactions: []};
+  // Profile pictures: Ana's comes with findChats, Família's only from
+  // fetchProfilePictureUrl, Carla's URL is broken, the others have none.
+  const pictures = {
+    [ana]: {file: 'avatar-maya.webp', inList: true},
+    [family]: {file: 'avatar-hike.webp', inList: false},
+    [carla]: {file: 'missing.webp', inList: false},
+  };
+  return {messages, contacts, chatNames, pictures, sent: [], reactions: [], mediaRequests: [], pictureRequests: []};
 }
 
-function reset(downForMs = 0) {
+function reset(downForMs = 0, failMedia = false) {
   idCounter = 0;
+  mediaFails = failMedia;
   state = seed();
   downUntil = Date.now() + downForMs;
 }
@@ -119,7 +138,7 @@ function publicRecord(message) {
   return rest;
 }
 
-function findChats(body) {
+function findChats(body, base) {
   const byJid = new Map();
   for (const message of state.messages) {
     const jid = message.key.remoteJid;
@@ -133,7 +152,7 @@ function findChats(body) {
       id: contact ? `contact-${jid}` : null,
       remoteJid: jid,
       pushName: state.chatNames[jid] ?? null,
-      profilePicUrl: null,
+      profilePicUrl: state.pictures[jid]?.inList ? `${base}/__mock/files/${state.pictures[jid].file}` : null,
       updatedAt: new Date(last.messageTimestamp * 1000).toISOString(),
       windowStart: null,
       windowExpires: null,
@@ -203,7 +222,7 @@ async function readJson(req) {
 }
 
 function route(method, pathname) {
-  const match = /^\/(chat|message|instance)\/([A-Za-z]+)\/([^/]+)$/.exec(pathname);
+  const match = /^\/(chat|message|instance)\/([A-Za-z0-9]+)\/([^/]+)$/.exec(pathname);
   if (!match) return null;
   let instance;
   try {
@@ -221,7 +240,7 @@ async function handle(req, res) {
   if (url.pathname.startsWith('/__mock/')) {
     if (url.pathname === '/__mock/reset' && req.method === 'POST') {
       const body = await readJson(req);
-      reset(Number(body.downForMs) || 0);
+      reset(Number(body.downForMs) || 0, body.mediaFails === true);
       return send(res, 200, {ok: true}, origin);
     }
     if (url.pathname === '/__mock/incoming' && req.method === 'POST') {
@@ -236,6 +255,21 @@ async function handle(req, res) {
     }
     if (url.pathname === '/__mock/sent' && req.method === 'GET') {
       return send(res, 200, state.sent, origin);
+    }
+    if (url.pathname === '/__mock/media-requests' && req.method === 'GET') {
+      return send(res, 200, state.mediaRequests, origin);
+    }
+    if (url.pathname === '/__mock/picture-requests' && req.method === 'GET') {
+      return send(res, 200, state.pictureRequests, origin);
+    }
+    if (url.pathname.startsWith('/__mock/files/') && req.method === 'GET') {
+      const file = path.join(ASSETS, path.basename(url.pathname));
+      if (!fs.existsSync(file)) {
+        res.writeHead(404, corsHeaders(origin));
+        return res.end();
+      }
+      res.writeHead(200, {'Content-Type': FILE_TYPES[path.extname(file)] ?? 'application/octet-stream', ...corsHeaders(origin)});
+      return fs.createReadStream(file).pipe(res);
     }
     return send(res, 404, {ok: false}, origin);
   }
@@ -270,7 +304,33 @@ async function handle(req, res) {
   const body = req.method === 'POST' ? await readJson(req) : {};
   switch (`${req.method} ${target.name}`) {
     case 'POST chat/findChats':
-      return send(res, 200, findChats(body), origin);
+      return send(res, 200, findChats(body, `http://${req.headers.host}`), origin);
+    case 'POST chat/fetchProfilePictureUrl': {
+      const jid = String(body.number ?? '');
+      state.pictureRequests.push(jid);
+      const picture = state.pictures[jid];
+      return send(res, 200, {wuid: jid, profilePictureUrl: picture ? `http://${req.headers.host}/__mock/files/${picture.file}` : null}, origin);
+    }
+    case 'POST chat/getBase64FromMediaMessage': {
+      const key = body?.message?.key ?? {};
+      state.mediaRequests.push({key, convertToMp4: body?.convertToMp4 === true});
+      const target = state.messages.find(message => message.key.id === key.id);
+      const part = target?.messageType;
+      if (mediaFails || !target || (part !== 'imageMessage' && part !== 'audioMessage')) {
+        return send(res, 400, errorBody(400, 'Bad Request', [mediaFails ? 'Error: Download Media failed' : 'The message is not of the media type']), origin);
+      }
+      const isImage = part === 'imageMessage';
+      const data = fs.readFileSync(path.join(ASSETS, isImage ? 'photo-trail-map.webp' : 'voice-note.ogg'));
+      return send(res, 201, {
+        mediaType: part,
+        fileName: `${key.id}.${isImage ? 'webp' : 'ogg'}`,
+        caption: target.message?.[part]?.caption,
+        size: {fileLength: data.length},
+        mimetype: isImage ? 'image/webp' : 'audio/ogg; codecs=opus',
+        base64: data.toString('base64'),
+        buffer: null,
+      }, origin);
+    }
     case 'POST chat/findContacts':
       return send(res, 200, findContacts(), origin);
     case 'POST chat/findMessages':
