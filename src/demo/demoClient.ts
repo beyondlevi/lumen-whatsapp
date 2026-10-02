@@ -5,6 +5,7 @@
 // are files inside the package; the app loads them like any other image/audio.
 
 import {EvolutionError, type EvolutionApi, type MediaPayload, type MessageKeyRef} from '../evolution/client';
+import voiceNote from './assets/voice-note.ogg';
 import {DEMO_DAY_END, demoChats, type DemoChat, type DemoMessage} from './demoData';
 
 /** Time the "Sending" state stays on screen. */
@@ -128,6 +129,22 @@ export function createDemoClient(): EvolutionApi {
           chat.unreadCount += 1;
         }, AUTO_REPLY_DELAY_MS);
       }
+      return {...record(chat, sent), status: 'PENDING'};
+    },
+
+    async sendVoice(remoteJid: string, _audio: string, seconds?: number) {
+      await wait(SEND_DELAY_MS);
+      const chat = chatFor(remoteJid);
+      if (!chat) {
+        return null;
+      }
+      // The demo "recording" is the packaged voice note.
+      const sent = add(chat, {
+        fromMe: true,
+        messageType: 'audioMessage',
+        message: {audioMessage: {seconds: Math.max(1, Math.round(seconds ?? 6)), ptt: true, mimetype: 'audio/ogg; codecs=opus'}},
+        media: {url: voiceNote, mimetype: 'audio/ogg; codecs=opus'},
+      });
       return {...record(chat, sent), status: 'PENDING'};
     },
 

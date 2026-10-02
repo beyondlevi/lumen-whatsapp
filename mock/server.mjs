@@ -14,6 +14,7 @@
 //   GET  /__mock/sent               messages sent through sendText
 //   GET  /__mock/reactions          reactions sent through sendReaction
 //   GET  /__mock/media-requests     keys asked from getBase64FromMediaMessage
+//   GET  /__mock/voice              voice notes sent through sendWhatsAppAudio ({number, bytes, head, encoding})
 //   GET  /__mock/files/<name>       profile pictures (files from src/demo/assets)
 // fetchProfilePictureUrl and getBase64FromMediaMessage serve the fictional
 // demo assets; reset with {mediaFails: true} makes media downloads fail (400).
@@ -110,7 +111,7 @@ function seed() {
     [family]: {file: 'avatar-hike.webp', inList: false},
     [carla]: {file: 'missing.webp', inList: false},
   };
-  return {messages, contacts, chatNames, pictures, sent: [], reactions: [], mediaRequests: [], pictureRequests: []};
+  return {messages, contacts, chatNames, pictures, sent: [], reactions: [], voice: [], mediaRequests: [], pictureRequests: []};
 }
 
 function reset(downForMs = 0, failMedia = false) {
@@ -256,6 +257,9 @@ async function handle(req, res) {
     if (url.pathname === '/__mock/sent' && req.method === 'GET') {
       return send(res, 200, state.sent, origin);
     }
+    if (url.pathname === '/__mock/voice' && req.method === 'GET') {
+      return send(res, 200, state.voice, origin);
+    }
     if (url.pathname === '/__mock/media-requests' && req.method === 'GET') {
       return send(res, 200, state.mediaRequests, origin);
     }
@@ -350,6 +354,21 @@ async function handle(req, res) {
       state.sent.push({number: body.number, text: body.text, quoted: body.quoted ?? null});
       const {id, MessageUpdate, _unread, ...response} = message;
       return send(res, 201, {...response, status: 'PENDING', contextInfo: {mentionedJid: [], groupMentions: []}}, origin);
+    }
+    case 'POST message/sendWhatsAppAudio': {
+      // Like Evolution: `audio` must be a URL or plain base64 (class-validator isBase64).
+      const audio = typeof body.audio === 'string' ? body.audio : '';
+      if (!/^[A-Za-z0-9+/]+={0,2}$/.test(audio) || audio.length % 4 !== 0) {
+        return send(res, 400, errorBody(400, 'Bad Request', ['File buffer, URL, or base64 audio is required']), origin);
+      }
+      const bytes = Buffer.from(audio, 'base64');
+      state.voice.push({number: body.number, bytes: bytes.length, head: bytes.subarray(0, 4).toString('latin1'), encoding: body.encoding});
+      const remoteJid = String(body.number).includes('@') ? String(body.number) : `${body.number}@s.whatsapp.net`;
+      const message = record({remoteJid, fromMe: true, secondsAgo: 0, messageType: 'audioMessage',
+        message: {audioMessage: {mimetype: 'audio/ogg; codecs=opus', ptt: true}}});
+      state.messages.push(message);
+      const {id, MessageUpdate, _unread, ...response} = message;
+      return send(res, 201, {...response, status: 'PENDING'}, origin);
     }
     case 'POST message/sendReaction': {
       const target = state.messages.find(message => message.key.id === body?.key?.id);

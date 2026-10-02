@@ -16,6 +16,7 @@ import path from 'node:path';
 import {unzipSync} from 'fflate';
 import {chromium, firefox} from 'playwright';
 import {MOCK_API_KEY, MOCK_INSTANCE, startMockServer} from '../../mock/server.mjs';
+import {fakeAudioScript} from './fakeAudio.mjs';
 import {startStaticServer} from './static-server.mjs';
 
 const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../..');
@@ -129,14 +130,16 @@ async function test(name, fn) {
     console.log(`ok   ${name} (${Date.now() - started} ms)`);
   } catch (error) {
     results.push({name, ok: false, error: error.message});
-    console.log(`FAIL ${name}\n     ${error.stack?.split('\n').slice(0, 3).join('\n     ')}`);
+    console.log(`FAIL ${name}\n     ${error.stack?.split('\n').slice(0, 8).join('\n     ')}`);
   }
 }
 
-async function newPage(browser, {locale = 'en-US', initScript} = {}) {
+async function newPage(browser, {locale = 'en-US', initScript, audio = false} = {}) {
   const [width, height] = (process.env.E2E_VIEWPORT ?? '600x600').split('x').map(Number);
   const context = await browser.newContext({viewport: {width, height}, locale});
   if (initScript) await context.addInitScript(initScript);
+  // The Lumen host's microphone/dictation API, scripted (see fakeAudio.mjs).
+  if (audio) await context.addInitScript(fakeAudioScript(`${MOCK}/__mock/files/voice-note.ogg`));
   const page = await context.newPage();
   const problems = [];
   page.on('pageerror', error => problems.push(`pageerror: ${error.message}`));
@@ -187,6 +190,10 @@ async function mainFlow(browser, label, appUrl = APP) {
     assert.equal(await page.getByText('Reaction 👍').count(), 0, 'no reaction bubble');
     assert.equal(await page.getByText(/tails/i).count(), 0, 'no Hide tails button');
     assert.equal(await page.locator('textarea').count(), 0, 'reply field only appears after Reply');
+    assert.ok(
+      await page.evaluate(() => [...document.querySelectorAll('[aria-disabled="true"], [disabled]')].some(element => /Voice/.test(element.textContent ?? '') || /Voice/.test(element.getAttribute('aria-label') ?? ''))),
+      'Voice is disabled when the host has no window.lumen.audio',
+    );
     assert.notEqual(await activeLabel(page), '(body)', 'something visible has focus on entry');
     const anaAfterOpen = (await mockChats()).find(chat => chat.remoteJid === ANA);
     assert.equal(anaAfterOpen.unreadCount, 0, 'opening the chat marks its messages as read');
@@ -493,24 +500,62 @@ async function demoFlow(browser, label, appUrl = APP, {audioOutput = true} = {})
       assert.equal(await page.locator('textarea').count(), 0);
       assert.equal(await activeLabel(page), 'div|Reply');
     });
-    // 8. Voice message: Enter plays, Enter pauses
-    await step(['ArrowUp', 'ArrowUp', 'ArrowUp', 'ArrowUp', 'ArrowUp'], 300, null, async () => {
+    // 8. Record and send a voice note (simulated microphone in demo mode)
+    await step(['ArrowRight'], 300, null, async () => {
+      assert.equal(await activeLabel(page), 'div|Voice');
+    });
+    await step(['Enter'], 2500, '14-recording', async () => {
+      assert.match(page.url(), /\/record$/);
+      assert.equal(await activeLabel(page), 'div|Send');
+      await waitForText(page, '0:02', 1000);
+    });
+    await step(['Enter'], 1200, '15-voice-sent', async () => {
+      await waitForText(page, 'Voice message sent', 2000);
+      assert.doesNotMatch(page.url(), /\/record$/);
+      assert.equal(await activeLabel(page), 'div|Voice');
+      assert.ok((await bubbleLabels(page)).some(label => /You: Voice message, 0:0[23]/.test(label)), 'sent voice note');
+    });
+    // 9. Voice message menu: Listen, Pause, Transcribe
+    await step(['ArrowLeft', ...Array(5).fill('ArrowUp')], 300, null, async () => {
       assert.match(await activeLabel(page), /Maya Chen: Voice message, 0:06/);
     });
-    await step(['Enter'], 2000, audioOutput ? '14-audio-playing' : null, async () => {
+    await step(['Enter'], 800, '16-audio-menu', async () => {
+      assert.equal(await activeLabel(page), 'div|Listen');
+      assert.ok(await page.getByText('Transcribe', {exact: true}).count() >= 1);
+    });
+    await step(['Enter'], 2000, audioOutput ? '17-audio-playing' : null, async () => {
       if (audioOutput) assert.match(await activeLabel(page), /Playing, 0:0[1-5] of 0:06/);
     });
-    await step(['Enter'], 300, audioOutput ? '15-audio-paused' : null, async () => {
+    await step(['Enter'], 600, null, async () => {
+      if (audioOutput) assert.equal(await activeLabel(page), 'div|Pause');
+    });
+    await step(['Enter'], 300, audioOutput ? '18-audio-paused' : null, async () => {
       if (audioOutput) assert.match(await activeLabel(page), /Paused, 0:0[1-5] of 0:06/);
+    });
+    await step(['Enter', 'ArrowRight'], 300, null, async () => {
+      assert.equal(await activeLabel(page), 'div|Transcribe');
+    });
+    await step(['Enter'], 1500, '19-transcribing', async () => {
+      assert.match(page.url(), /\/transcript\//);
+      await waitForText(page, 'Transcribing', 1000);
+      await waitForText(page, 'Morning! Quick update', 1000);
+    });
+    await step([], 2500, '20-transcript', async () => {
+      await waitForText(page, 'Save me a seat, see you soon.', 1000);
+      assert.equal(await page.getByText('Transcribing').count(), 0);
+    });
+    await step(['Escape'], 1500, '21-transcript-in-bubble', async () => {
+      assert.match(await activeLabel(page), /Maya Chen: Voice message, 0:06/);
+      await waitForText(page, "Morning! Quick update: I'm on my way", 1000);
     });
     // 9. Photo: View is the first menu item; Back returns to the same bubble
     await step(['ArrowUp'], 300, null, async () => {
       assert.match(await activeLabel(page), /Photo: Sketch from Monday/);
     });
-    await step(['Enter'], 800, '16-photo-menu', async () => {
+    await step(['Enter'], 800, '22-photo-menu', async () => {
       assert.equal(await activeLabel(page), 'div|View');
     });
-    await step(['Enter'], 2000, '17-photo-view', async () => {
+    await step(['Enter'], 2000, '23-photo-view', async () => {
       assert.match(page.url(), /\/photo\//);
       assert.ok(await page.evaluate(() => document.querySelector('.photo-image')?.naturalWidth > 0), 'photo shown');
     });
@@ -518,12 +563,12 @@ async function demoFlow(browser, label, appUrl = APP, {audioOutput = true} = {})
       assert.match(await activeLabel(page), /Photo: Sketch from Monday/);
     });
     // 10. Your own message with Maya's 👍
-    await step(['ArrowUp', 'ArrowUp'], 500, '18-reaction-badge', async () => {
+    await step(['ArrowUp', 'ArrowUp'], 500, '24-reaction-badge', async () => {
       assert.match(await activeLabel(page), /Yes, 10:00 in Room 3\., .*reactions 👍 1$/);
     });
     // 11. Back to the list: read, on top, previewing the last real message
-    await step(['Escape'], 1500, '19-list-after', async () => {
-      assert.match(await activeLabel(page), /^div\|Maya Chen, Perfect, thanks! See you at 10\., /);
+    await step(['Escape'], 1500, '25-list-after', async () => {
+      assert.match(await activeLabel(page), /^div\|Maya Chen, You: Audio, /);
       assert.deepEqual(await unreadRows(), ['+12025550199, Unread Status']);
     });
     assert.equal(await escapeReachesHost(page), true, 'Escape on the list is left to the platform');
@@ -636,14 +681,152 @@ async function mediaFlow(browser, {audioOutput}) {
     await press(page, 'ArrowLeft');
     await pressUntil(page, 'ArrowUp', /Voice message/, 10);
     await press(page, 'Enter');
+    assert.equal(await activeLabel(page), 'div|Listen', 'the voice message menu starts with Listen');
+    assert.ok(await page.getByText('Transcribe (not available on this device)').count() + (await page.$$('[aria-label="Transcribe (not available on this device)"]')).length >= 1, 'Transcribe is off without the host API');
+    await press(page, 'Enter');
     if (audioOutput) {
       await waitForFocus(page, /Playing, 0:0[1-6] of 0:0[67]/, 6000);
       await page.screenshot({path: path.join(outDir, 'media-5-audio-playing.png')});
+      await press(page, 'Enter');
+      assert.equal(await activeLabel(page), 'div|Pause', 'Listen reads Pause while playing');
       await press(page, 'Enter');
       await waitForFocus(page, /Paused, /);
     }
     const audioRequest = (await fetch(`${MOCK}/__mock/media-requests`).then(response => response.json())).at(-1);
     assert.equal(audioRequest.convertToMp4, false, 'OGG/Opus plays as is');
+    assert.deepEqual(problems, []);
+  } finally {
+    await context.close();
+  }
+}
+
+/** Voice notes through the scripted window.lumen.audio, against the mock: record, send, discard, limit, errors, transcribe. */
+async function voiceFlow(browser) {
+  await mockPost('/__mock/reset');
+  const {context, page, problems} = await newPage(browser, {audio: true});
+  const audioLog = () => page.evaluate(() => window.__audioLog);
+  const voiceSent = () => fetch(`${MOCK}/__mock/voice`).then(response => response.json());
+  const control = value => page.evaluate(next => Object.assign(window.__audioControl, next), value);
+  const toVoice = async () => {
+    await press(page, 'ArrowDown');
+    await press(page, 'ArrowLeft');
+    await press(page, 'ArrowRight');
+    assert.equal(await activeLabel(page), 'div|Voice');
+  };
+  try {
+    await page.goto(`${APP}/?${configQuery()}`);
+    await waitForText(page, 'Carla Dias');
+    await press(page, 'Enter');
+    await page.waitForURL(`**/chat/${encodeURIComponent(ANA)}`);
+    await waitForText(page, 'Levo o projetor');
+    await page.waitForTimeout(800);
+    await toVoice();
+
+    // Record and send
+    await press(page, 'Enter');
+    await page.waitForURL(/\/record$/);
+    await waitForText(page, 'Recording');
+    assert.equal(await activeLabel(page), 'div|Send', 'Send has the initial focus');
+    await waitForText(page, '0:01', 3000);
+    await page.screenshot({path: path.join(outDir, 'voice-1-recording.png')});
+    await press(page, 'Enter');
+    await waitForText(page, 'Voice message sent', 5000);
+    await page.waitForURL(`**/chat/${encodeURIComponent(ANA)}`);
+    let sent = await voiceSent();
+    assert.equal(sent.length, 1);
+    assert.deepEqual({number: sent[0].number, head: sent[0].head, encoding: sent[0].encoding}, {number: ANA, head: 'OggS', encoding: true});
+    assert.equal((await audioLog()).stops, 1);
+    await page.waitForTimeout(500);
+    assert.ok((await bubbleLabels(page)).some(label => /You: Voice message, 0:0\d/.test(label)), 'the sent voice note shows');
+    { const label = await activeLabel(page); assert.equal(label, 'div|Voice', `focus returns to Voice, got ${label}`); }
+
+    // Discard, then Back: nothing sent, recordings cancelled
+    await press(page, 'Enter');
+    await page.waitForURL(/\/record$/);
+    await page.waitForTimeout(600);
+    await press(page, 'ArrowRight');
+    assert.equal(await activeLabel(page), 'div|Discard');
+    await press(page, 'Enter');
+    await page.waitForURL(`**/chat/${encodeURIComponent(ANA)}`);
+    await page.waitForTimeout(500);
+    await press(page, 'Enter');
+    await page.waitForURL(/\/record$/);
+    await page.waitForTimeout(600);
+    await press(page, 'Escape');
+    await page.waitForURL(`**/chat/${encodeURIComponent(ANA)}`);
+    await page.waitForTimeout(500);
+    assert.equal((await audioLog()).cancels, 2, 'Discard and Back cancel the recording');
+    assert.equal((await voiceSent()).length, 1, 'nothing more was sent');
+
+    // The 2-minute limit: the host ends the recording, the app asks Send / Discard
+    await control({endAfterMs: 1200});
+    await press(page, 'Enter');
+    await page.waitForURL(/\/record$/);
+    await waitForText(page, 'Reached the 2:00 limit', 4000);
+    assert.equal(await activeLabel(page), 'div|Send');
+    assert.equal((await audioLog()).records.at(-1).maxMs, 120000, 'records with the 2-minute limit');
+    await page.screenshot({path: path.join(outDir, 'voice-2-limit.png')});
+    await press(page, 'Enter');
+    await waitForText(page, 'Voice message sent', 5000);
+    assert.equal((await voiceSent()).length, 2);
+    await control({endAfterMs: null});
+    await page.waitForTimeout(500);
+
+    // Host errors: busy (then Try again works), no-phone
+    await control({recordError: 'busy'});
+    await press(page, 'Enter');
+    await waitForText(page, "Couldn't record");
+    await waitForText(page, 'busy with another recording or dictation');
+    assert.equal(await activeLabel(page), 'div|Try again');
+    await page.screenshot({path: path.join(outDir, 'voice-3-busy.png')});
+    await press(page, 'Enter');
+    await waitForText(page, '0:01', 3000);
+    await press(page, 'Escape');
+    await page.waitForURL(`**/chat/${encodeURIComponent(ANA)}`);
+    await page.waitForTimeout(500);
+    await control({recordError: 'no-phone'});
+    await press(page, 'Enter');
+    await waitForText(page, 'not connected to the phone');
+    await press(page, 'Escape');
+    await page.waitForURL(`**/chat/${encodeURIComponent(ANA)}`);
+    await page.waitForTimeout(500);
+
+    // Transcribe Ana's voice note: partials, then the text; kept for the session
+    await press(page, 'ArrowLeft');
+    await pressUntil(page, 'ArrowUp', /Ana Souza: Voice message/, 12);
+    await press(page, 'Enter');
+    assert.equal(await activeLabel(page), 'div|Listen');
+    await press(page, 'ArrowRight');
+    assert.equal(await activeLabel(page), 'div|Transcribe');
+    await press(page, 'Enter');
+    await page.waitForURL(/\/transcript\//);
+    await waitForText(page, 'Transcribing');
+    await page.waitForFunction(() => window.__audioLog.partials >= 2, null, {timeout: 3000});
+    await waitForText(page, 'This is a fake transcript of the voice message.', 5000);
+    await page.screenshot({path: path.join(outDir, 'voice-4-transcript.png')});
+    await press(page, 'Escape');
+    await waitForFocus(page, /Ana Souza: Voice message/);
+    await waitForText(page, 'This is a fake transcript');
+    await press(page, 'Enter');
+    await press(page, 'ArrowRight');
+    await press(page, 'Enter');
+    await waitForText(page, 'This is a fake transcript of the voice message.', 1000);
+    assert.equal((await audioLog()).transcribes, 1, 'the second opening uses the kept transcript');
+    await press(page, 'Escape');
+    await waitForFocus(page, /Ana Souza: Voice message/);
+
+    // Engine error, then Try again
+    await control({transcribeError: 'engine', transcript: 'Second try worked.'});
+    await pressUntil(page, 'ArrowDown', /You: Voice message/, 12);
+    await press(page, 'Enter');
+    await press(page, 'ArrowRight');
+    await press(page, 'Enter');
+    await waitForText(page, "Couldn't transcribe");
+    await waitForText(page, 'The transcription engine failed: Model not downloaded');
+    await pressUntil(page, 'ArrowDown', /Try again/);
+    await press(page, 'Enter');
+    await waitForText(page, 'Second try worked.', 5000);
+    await press(page, 'Escape');
     assert.deepEqual(problems, []);
   } finally {
     await context.close();
@@ -676,6 +859,8 @@ async function run() {
           const {blocked} = await demoFlow(browser, name, APP, {audioOutput: name !== 'firefox'});
           console.log(`     blocked (Toolkit font only): ${JSON.stringify(blocked)}`);
         });
+
+        await test(`[${name}] voice notes: record, send, discard, Back, 2-minute limit, busy/no-phone, transcribe (partials, kept, engine error)`, () => voiceFlow(browser));
 
         await test(`[${name}] setup screen without configuration`, async () => {
           const {context, page, problems} = await newPage(browser);

@@ -7,6 +7,8 @@ export type LoadedMedia = {src: string; mimetype: string};
 
 export type MediaLoader = {
   load(message: ChatMessage): Promise<LoadedMedia>;
+  /** Keeps audio you just recorded, so playing your own voice note needs no download. */
+  prime(messageId: string, blob: Blob, mimetype: string): void;
   dispose(): void;
 };
 
@@ -83,6 +85,11 @@ export function createMediaLoader(api: EvolutionApi): MediaLoader {
         }
       }
       return pending;
+    },
+    prime(messageId, blob, mimetype) {
+      const src = URL.createObjectURL(blob);
+      objectUrls.set(messageId, src);
+      items.set(messageId, Promise.resolve({src, mimetype}));
     },
     dispose() {
       for (const url of objectUrls.values()) {

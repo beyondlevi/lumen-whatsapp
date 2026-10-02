@@ -6,6 +6,7 @@
 //   POST /chat/markMessageAsRead/{instance}  {readMessages: [{id, fromMe, remoteJid}]}
 //   POST /message/sendText/{instance}        {number, text, quoted?: {key, message}}
 //   POST /message/sendReaction/{instance}    {key: {id, remoteJid, fromMe, participant?}, reaction}
+//   POST /message/sendWhatsAppAudio/{instance} {number, audio: base64, encoding: true} (voice note, ptt)
 //   POST /chat/fetchProfilePictureUrl/{instance}     {number} -> {wuid, profilePictureUrl | null}
 //   POST /chat/getBase64FromMediaMessage/{instance}  {message: {key}, convertToMp4?} -> {mimetype, base64, …}
 // Every call sends the `apikey` header. The instance name is a path segment and
@@ -51,6 +52,7 @@ export type EvolutionApi = Pick<
   | 'findMessages'
   | 'sendText'
   | 'sendReaction'
+  | 'sendVoice'
   | 'markMessagesAsRead'
   | 'fetchProfilePictureUrl'
   | 'getMediaMessage'
@@ -197,6 +199,15 @@ export class EvolutionClient {
       body.quoted = {key: quoted.key, message: {conversation: quoted.text}};
     }
     return this.post('message/sendText', body, signal);
+  }
+
+  /**
+   * Sends a voice note (shown with the waveform/ptt UI). `audio` is base64 without a data: prefix;
+   * with `encoding: true` the server converts it with ffmpeg to OGG/Opus mono 48 kHz, which WhatsApp
+   * requires for voice notes. `seconds` is only used by the demo client.
+   */
+  sendVoice(remoteJid: string, audio: string, _seconds?: number, signal?: AbortSignal): Promise<unknown> {
+    return this.post('message/sendWhatsAppAudio', {number: remoteJid, audio, encoding: true}, signal, MEDIA_TIMEOUT_MS);
   }
 
   /** Reacts to a message with an emoji (an empty string removes the reaction). */

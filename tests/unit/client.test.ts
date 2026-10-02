@@ -31,6 +31,14 @@ async function captureError(promise: Promise<unknown>): Promise<EvolutionError> 
 }
 
 describe('EvolutionClient requests', () => {
+  it('sends voice notes to sendWhatsAppAudio as plain base64 with encoding on', async () => {
+    const {client, fetchMock} = clientReturning(jsonResponse(201, {key: {id: 'V1', fromMe: true, remoteJid: 'x@s.whatsapp.net'}}));
+    await client.sendVoice('5511999990001@s.whatsapp.net', 'T2dnUw==', 4);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe('https://evo.example.test/message/sendWhatsAppAudio/My%20Phone%2B1');
+    expect(JSON.parse(String(init.body))).toEqual({number: '5511999990001@s.whatsapp.net', audio: 'T2dnUw==', encoding: true});
+  });
+
   it('URL-encodes the instance and sends the apikey header', async () => {
     const {client, fetchMock} = clientReturning(jsonResponse(200, []));
     await client.findChats(40);

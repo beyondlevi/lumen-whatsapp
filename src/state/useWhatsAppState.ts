@@ -16,6 +16,8 @@ import {describeContent} from '../format';
 import {setLocaleOverride, t} from '../i18n/strings';
 import {cacheAccount, loadChatCache, saveChatCache} from './chatCache';
 import {loadReadMarks, saveReadMarks, type ReadMarks} from './readMarks';
+import {createDemoAudio} from '../audio/demoAudio';
+import {hostAudio, type LumenAudio, type LumenAudioResult} from '../audio/lumenAudio';
 import {createAvatarLoader} from './avatars';
 import {createMediaLoader, type LoadedMedia} from './media';
 import {useLumenConfig} from './useLumenConfig';
@@ -68,11 +70,28 @@ export type WhatsAppState = {
   requestAvatar(jid: string, knownUrl?: string): void;
   /** Downloads a photo or voice message on demand (kept in memory for the session). */
   loadMedia(message: ChatMessage): Promise<LoadedMedia>;
+  /** Microphone and transcription: the host's, the simulated one in demo mode, or null (not available). */
+  audio: LumenAudio | null;
+  /** Sends a recorded voice note (`levels` is accepted for the shared recorder; WhatsApp draws its own waveform). */
+  sendVoice(jid: string, recording: LumenAudioResult, levels?: readonly number[]): Promise<void>;
+  /** Transcription of a message made this session, if any. */
+  transcriptFor(messageId: string): string | null;
+  saveTranscript(messageId: string, text: string): void;
   /** Chat order last shown by the list; kept across the list route's unmounts. */
   listOrder: {current: string[] | null};
 };
 
 const EMPTY_THREAD: Thread = {loaded: false, synced: false, messages: []};
+
+/** Base64 of a blob, without the data: prefix (what Evolution's media endpoints take). */
+async function blobToBase64(blob: Blob): Promise<string> {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let binary = '';
+  for (let index = 0; index < bytes.length; index += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
+  }
+  return btoa(binary);
+}
 
 function toError(error: unknown): EvolutionError {
   return error instanceof EvolutionError
@@ -126,6 +145,8 @@ export function useWhatsAppState(): WhatsAppState {
   );
 
   const [avatarVersion, setAvatarVersion] = useState(0);
+  const [transcripts, setTranscripts] = useState<Record<string, string>>({});
+  const audio = useMemo(() => (config.status === 'demo' ? createDemoAudio() : hostAudio()), [config.status]);
   const cacheAccountKey = config.status === 'ready' ? cacheAccount(config.config) : null;
   const avatars = useMemo(
     () =>
@@ -512,6 +533,45 @@ export function useWhatsAppState(): WhatsAppState {
     [client],
   );
 
+  const sendVoice = useCallback(
+    async (jid: string, recording: LumenAudioResult) => {
+      if (client == null) {
+        throw new EvolutionError('network', null, 'Not connected');
+      }
+      const seconds = Math.max(1, Math.round(recording.durationMs / 1000));
+      const response = await client.sendVoice(jid, await blobToBase64(recording.blob), seconds);
+      const parsed = parseMessage(response);
+      const sent: ChatMessage = {
+        id: parsed?.id ?? `local-voice-${Date.now()}`,
+        remoteJid: jid,
+        fromMe: true,
+        senderName: null,
+        timestamp: parsed?.timestamp ?? Date.now(),
+        content: {kind: 'audio', text: '', seconds: parsed?.content.seconds ?? seconds},
+        pending: true,
+      };
+      media?.prime(sent.id, recording.blob, recording.mimeType);
+      setThreads(previous => {
+        const current = previous[jid] ?? {loaded: true, synced: true, messages: []};
+        return {...previous, [jid]: {...current, messages: mergeThread(current.messages, [sent])}};
+      });
+      setChats(previous => {
+        const existing = previous.find(chat => chat.jid === jid);
+        if (!existing) {
+          return previous;
+        }
+        const updated = {...existing, lastMessage: sent, timestamp: sent.timestamp};
+        return [updated, ...previous.filter(chat => chat.jid !== jid)];
+      });
+    },
+    [client, media],
+  );
+
+  const saveTranscript = useCallback(
+    (messageId: string, text: string) => setTranscripts(previous => ({...previous, [messageId]: text})),
+    [],
+  );
+
   const loadMedia = useCallback(
     (message: ChatMessage) =>
       media == null ? Promise.reject(new EvolutionError('network', null, 'Not connected')) : media.load(message),
@@ -567,9 +627,13 @@ export function useWhatsAppState(): WhatsAppState {
       avatarFor: jid => avatars?.get(jid) ?? null,
       requestAvatar: (jid, knownUrl) => avatars?.request(jid, knownUrl),
       loadMedia,
+      audio,
+      sendVoice,
+      transcriptFor: messageId => transcripts[messageId] ?? null,
+      saveTranscript,
       listOrder: listOrderRef,
     }),
     // avatarVersion: a picture finished loading.
-    [avatarVersion, avatars, chats, config, isUnread, loadMedia, offline, openThread, phase, reloadConfig, sendReaction, sendText, syncing, threads],
+    [audio, avatarVersion, avatars, chats, config, isUnread, loadMedia, offline, openThread, phase, reloadConfig, saveTranscript, sendReaction, sendText, sendVoice, syncing, threads, transcripts],
   );
 }

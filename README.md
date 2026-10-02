@@ -18,8 +18,12 @@ toolkit's messaging example (`examples/messaging`).
 - **Voice messages**: the bubble shows the length; Enter plays or pauses it, with the position and a
   progress bar. The audio is downloaded on the first play. WhatsApp voice notes are OGG/Opus, which
   `<audio>` plays in GeckoView and in Chromium; if `canPlayType` says no, the app asks the server for MP4
-  (`convertToMp4`). One message plays at a time and playback stops when the conversation closes. Because
-  Enter plays, voice messages have no reaction/reply menu.
+  (`convertToMp4`). One message plays at a time and playback stops when the conversation closes.
+  Enter on a voice message opens its menu: **Listen** (it reads **Pause** while playing), **Transcribe**,
+  the four reactions and Reply.
+- **Sending voice notes**: **Voice** opens the recording screen, which records through the Lumen host's
+  microphone API (see "Lumen audio API" below). Send posts the note to `sendWhatsAppAudio`; it arrives
+  as a WhatsApp voice note (ptt).
 - **Reactions**: a reaction is never a bubble. Each message shows a badge under its bottom-right corner
   with the emojis people reacted with and, from 2 on, the count (the latest reaction of each person
   counts; an empty one removes it). This covers reactions from the server (`reactionMessage` records
@@ -31,8 +35,8 @@ toolkit's messaging example (`examples/messaging`).
   `fetchProfilePictureUrl` per chat (two at a time), cached in localStorage (`lumen-whatsapp.avatars.v1`,
   24 h; “no picture” 6 h). A picture is shown only after it loads; otherwise the initials (or a
   person/group icon) stay.
-- **Conversation actions**: a bottom rail with Reply, Voice and Photos (disabled: web apps have no
-  microphone or media access).
+- **Conversation actions**: a bottom rail with Reply, Voice (records a voice note when the host has
+  `window.lumen.audio`, disabled otherwise) and Photos (disabled).
 - **Reply**: the text field (the toolkit's `InputTextView`, a real `<textarea>`) appears only after Reply,
   as its own history entry, so Back closes it and focus returns to Reply. On the glasses, Enter on the
   field opens the platform's dictation composer, and the text arrives through `input`/`change` events.
@@ -64,7 +68,11 @@ The app uses only arrow keys, Enter, and Escape (the Neural Band / Rokid gesture
 | Reply field | Right, then Enter | Send (the path to use on the glasses after dictating); the field closes |
 | Reply field | Escape | Closes the field, back to Reply |
 | Conversation | Enter on a bubble | Opens the message menu |
-| Conversation | Enter on a voice message | Plays / pauses it |
+| Conversation | Enter on a voice message | Opens its menu: Listen/Pause, Transcribe, reactions, Reply |
+| Conversation | Enter on Voice | Opens the recording screen |
+| Recording | Enter on Send (initial focus) | Stops, sends, returns to the conversation on Voice |
+| Recording | Right, Enter (Discard) or Escape | Cancels without sending |
+| Transcript | Escape | Back to the voice message (the transcript stays under it) |
 | Message menu | Left / Right, Enter | Pick View (photos), 👍 ❤️ 😂 😭 (sends the reaction) or Reply (quoted reply) |
 | Photo | Escape | Back to the conversation, on the same bubble |
 | Photo error | Enter on “Try again” | Downloads the photo again |
@@ -152,6 +160,7 @@ The instance name is a path segment encoded with `encodeURIComponent`, so a spac
 | `POST /message/sendReaction/{instance}` | `{"key": {"id", "fromMe", "remoteJid", "participant"?}, "reaction": "👍"}` (`participant` for group messages) | 201; failures show a Toast |
 | `POST /chat/markMessageAsRead/{instance}` | `{"readMessages": [{"id", "fromMe": false, "remoteJid"}]}` (up to 30) | 201; failures are ignored |
 | `POST /chat/fetchProfilePictureUrl/{instance}` | `{"number": "<jid>"}` (contacts and groups) | 200, `{wuid, profilePictureUrl}`; `null` when there is none or it is private |
+| `POST /message/sendWhatsAppAudio/{instance}` | `{"number": "<jid>", "audio": "<base64>", "encoding": true}`. `audio` is plain base64 or a URL (class-validator `isBase64`, no `data:` prefix); multipart with a `file` field also works | 201, the sent message. With `encoding: true` (also the default) the server re-encodes with ffmpeg to OGG/Opus mono 48 kHz (`libopus`, `-application voip`) and sends it as a voice note (`ptt: true`, `audio/ogg; codecs=opus`). The host's recording is already OGG/Opus mono 16 kHz; `encoding: false` would skip the conversion, but keeping it is safer for WhatsApp. Source: [`audioWhatsapp`](https://github.com/EvolutionAPI/evolution-api/blob/fa09d37892cdbb1d65a250155d293d92230c5b30/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts#L3206), [route](https://github.com/EvolutionAPI/evolution-api/blob/fa09d37892cdbb1d65a250155d293d92230c5b30/src/api/routes/sendMessage.router.ts#L88) |
 | `POST /chat/getBase64FromMediaMessage/{instance}` | `{"message": {"key": {"id", "fromMe", "remoteJid"}}, "convertToMp4": false}` | 201, `{mediaType, fileName, mimetype, base64, …}`; 400 when the download fails. The server looks the message up by key and retries a failed download once after 5 s, so the app waits up to 30 s |
 
 `status@broadcast`, `@broadcast` and `@newsletter` chats are hidden.
@@ -196,6 +205,52 @@ so the app shows “Can't reach the server”.
   documents keep their marker. Downloads live in memory for the session (the last 6) and are never stored.
 - **Profile pictures** are WhatsApp CDN URLs (`pps.whatsapp.net`) loaded with `<img>`, so they need the
   phone's internet like the rest of the app, and expire after a while (hence the 24 h cache).
+
+## Lumen audio API (voice notes and transcription)
+
+On the Rokid glasses `getUserMedia` is muted for apps, so the app never uses `getUserMedia` or
+`MediaRecorder`. The phone captures the glasses' microphone and transcribes, and the Lumen host exposes
+that as `window.lumen.audio` (`src/audio/lumenAudio.ts`):
+
+```ts
+interface LumenAudio {
+  record(options?: {maxMs?: number}): Promise<LumenRecording>;      // the app asks for 120000 (2 min)
+  transcribe(audio: Blob, options?: {language?: string; onPartial?: (text: string) => void;
+    signal?: AbortSignal}): Promise<{text: string}>;
+}
+interface LumenRecording {
+  onLevel: ((level: number, elapsedMs: number) => void) | null;  // ~5 times a second
+  onEnd: ((reason: 'max' | 'error', result?: LumenAudioResult, error?: Error) => void) | null;
+  stop(): Promise<LumenAudioResult>;                               // {blob, mimeType, durationMs}
+  cancel(): void;
+}
+// Rejections carry .code: busy, no-phone, unavailable, too-large, unsupported-format, no-speech,
+// engine (with .message), cancelled, timeout.
+```
+
+- **Feature detection**: the API is used only when `window.lumen.audio` has `record` and `transcribe`.
+  On older hosts, **Voice** stays disabled and **Transcribe** is shown disabled ("not available on this
+  device").
+- **Recording screen** (`/chat/:id/record`, its own history entry):
+  - shows the elapsed time, a microphone level bar (from `onLevel`) and **Send** (initial focus) /
+    **Discard**;
+  - Send stops and sends; Discard or Back cancels without sending;
+  - at 2:00 the host ends the recording (`onEnd('max', result)`), and the screen says so and keeps
+    Send / Discard;
+  - while sending, a spinner; then the Toast "Voice message sent", and the conversation shows the note,
+    playable at once from memory;
+  - host errors show a message with **Try again**.
+- **Transcription screen** (`/chat/:id/transcript/:messageId`, Back closes):
+  - downloads the voice note like Listen, calls `transcribe`, and shows the partial text live, then the
+    final text;
+  - the transcript is kept in memory for the session (opening it again is instant) and also shows under
+    the voice bubble;
+  - errors (busy, no-phone, too-large, no-speech, engine, …) have their own message and **Try again**;
+  - Back aborts a running transcription (`signal`).
+- **Demo mode** uses a simulated `window.lumen.audio` (`src/audio/demoAudio.ts`):
+  - an animated level while recording, and the packaged demo voice note as the recording;
+  - a fixed English transcript delivered word by word;
+  - no microphone, no network, no storage.
 
 ## Development
 
@@ -264,6 +319,16 @@ header lists the setup.
 
 CI (`.github/workflows/ci.yml`) runs the unit tests, `npm run package`, and the E2E suite. It uploads
 the `.mrbd.zip` and the E2E screenshots as artifacts.
+
+Voice notes and transcription (`tests/e2e/fakeAudio.mjs` injects a scripted `window.lumen.audio`, in
+Chromium and Firefox):
+- recording, Send, Discard, Back and the 2-minute limit (`maxMs: 120000`, `onEnd('max')`);
+- the voice note sent to `sendWhatsAppAudio` (base64 OGG, `encoding: true`, checked on the mock);
+- the `busy` and `no-phone` errors and Try again;
+- the voice menu (Listen, Pause, Transcribe);
+- transcription: partials, the kept transcript, an `engine` error and Try again;
+- Voice and Transcribe disabled without the API;
+- the demo capture script records, sends and transcribes with the simulated API.
 
 Headless browsers do not replace a test on the glasses (GeckoView and WebView, the dictation composer, and
 the Back gesture).
