@@ -278,6 +278,29 @@ export function parseContacts(value: unknown): ContactNames {
   return names;
 }
 
+/** A saved contact or known group that can be messaged. */
+export type Contact = {jid: string; name: string; isGroup: boolean};
+
+/** Contacts with a name and a JID that takes messages (people and groups, not @lid or broadcasts). */
+export function parseContactList(value: unknown): Contact[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const seen = new Set<string>();
+  const contacts: Contact[] = [];
+  for (const item of value) {
+    const contact = asObject(item);
+    const jid = asString(contact?.remoteJid);
+    const name = asString(contact?.pushName)?.trim();
+    if (!jid || !name || seen.has(jid) || !(jid.endsWith('@s.whatsapp.net') || jid.endsWith('@g.us'))) {
+      continue;
+    }
+    seen.add(jid);
+    contacts.push({jid, name, isGroup: jid.endsWith('@g.us')});
+  }
+  return contacts;
+}
+
 export function parseChats(value: unknown, contacts?: ContactNames): Chat[] {
   if (!Array.isArray(value)) {
     return [];

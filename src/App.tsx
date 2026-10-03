@@ -7,6 +7,7 @@ import {BrowserRouter, Navigate, Route, Routes} from 'react-router-dom';
 import {ChatListPage} from './pages/ChatListPage';
 import {PhotoPage} from './pages/PhotoPage';
 import {RecordPage} from './pages/RecordPage';
+import {SearchPage, SEARCH_PATH} from './pages/SearchPage';
 import {ThreadPage} from './pages/ThreadPage';
 import {TranscriptPage} from './pages/TranscriptPage';
 
@@ -22,6 +23,7 @@ export default function WhatsAppApp() {
             {({location}) => (
               <Routes location={location}>
                 <Route path="/" element={<ChatListPage />} />
+                <Route path={SEARCH_PATH} element={<SearchPage />} />
                 <Route path="/chat/:jid" element={<ThreadPage />} />
                 <Route path="/chat/:jid/photo/:messageId" element={<PhotoPage />} />
                 <Route path="/chat/:jid/record" element={<RecordPage />} />

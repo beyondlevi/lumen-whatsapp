@@ -5,14 +5,18 @@ import {createDemoClient} from '../demo/demoClient';
 import {EvolutionClient, EvolutionError, isAbortError, type EvolutionApi} from '../evolution/client';
 import {
   parseChats,
+  parseContactList,
   parseContacts,
   parseMessage,
   parseMessages,
+  phoneFromJid,
   type Chat,
   type ChatMessage,
+  type Contact,
   type ContactNames,
 } from '../evolution/parse';
-import {describeContent} from '../format';
+import {chatDisplayName, chatPreview, describeContent} from '../format';
+import type {SearchTarget} from '../search/searchTargets';
 import {setLocaleOverride, t} from '../i18n/strings';
 import {cacheAccount, loadChatCache, saveChatCache} from './chatCache';
 import {loadReadMarks, saveReadMarks, type ReadMarks} from './readMarks';
@@ -79,6 +83,12 @@ export type WhatsAppState = {
   saveTranscript(messageId: string, text: string): void;
   /** Chat order last shown by the list; kept across the list route's unmounts. */
   listOrder: {current: string[] | null};
+  /** Demo mode: fictional chats, no server. */
+  demo: boolean;
+  /** The list's chats (recent first) and the saved contacts, for voice search; contacts load once. */
+  searchTargets(): Promise<SearchTarget[]>;
+  /** Saved name of a contact, for a conversation that is not in the list yet. */
+  contactName(jid: string): string | null;
 };
 
 const EMPTY_THREAD: Thread = {loaded: false, synced: false, messages: []};
@@ -143,6 +153,10 @@ export function useWhatsAppState(): WhatsAppState {
           : null,
     [config],
   );
+
+  // Saved contacts for voice search, fetched on the first search of a session.
+  const contactListRef = useRef<{client: EvolutionApi; list: Promise<Contact[]>} | null>(null);
+  const [contactNames, setContactNames] = useState<ReadonlyMap<string, string>>(new Map());
 
   const [avatarVersion, setAvatarVersion] = useState(0);
   const [transcripts, setTranscripts] = useState<Record<string, string>>({});
@@ -595,6 +609,46 @@ export function useWhatsAppState(): WhatsAppState {
     return () => clearTimeout(timer);
   }, [cacheAccountKey, chats, phase.kind, syncing, threads]);
 
+  const searchTargets = useCallback(async (): Promise<SearchTarget[]> => {
+    if (client == null) {
+      return [];
+    }
+    if (contactListRef.current?.client !== client) {
+      const list = client.findContacts().then(parseContactList);
+      contactListRef.current = {client, list};
+      list.then(
+        contacts => setContactNames(new Map(contacts.map(contact => [contact.jid, contact.name]))),
+        () => {
+          // Try again on the next search.
+          if (contactListRef.current?.list === list) {
+            contactListRef.current = null;
+          }
+        },
+      );
+    }
+    const chatTargets: SearchTarget[] = chatsRef.current.map(chat => ({
+      id: chat.jid,
+      name: chatDisplayName(chat.jid, chat.name),
+      phone: phoneFromJid(chat.jid),
+      isGroup: chat.isGroup,
+      detail: chatPreview(chat, threadsRef.current[chat.jid]?.messages ?? []),
+      inChats: true,
+    }));
+    let contacts: Contact[] = [];
+    try {
+      contacts = await contactListRef.current.list;
+    } catch {
+      // Without contacts, the chats alone are searched.
+    }
+    const inChats = new Set(chatTargets.map(target => target.id));
+    return [
+      ...chatTargets,
+      ...contacts
+        .filter(contact => !inChats.has(contact.jid))
+        .map(contact => ({id: contact.jid, name: contact.name, phone: phoneFromJid(contact.jid), isGroup: contact.isGroup, detail: null, inChats: false})),
+    ];
+  }, [client]);
+
   const isUnread = useCallback(
     (chat: Chat) =>
       chat.unreadCount > 0 &&
@@ -632,8 +686,11 @@ export function useWhatsAppState(): WhatsAppState {
       transcriptFor: messageId => transcripts[messageId] ?? null,
       saveTranscript,
       listOrder: listOrderRef,
+      demo,
+      searchTargets,
+      contactName: jid => contactNames.get(jid) ?? contactsRef.current.get(jid) ?? null,
     }),
     // avatarVersion: a picture finished loading.
-    [audio, avatarVersion, avatars, chats, config, isUnread, loadMedia, offline, openThread, phase, reloadConfig, saveTranscript, sendReaction, sendText, sendVoice, syncing, threads, transcripts],
+    [audio, avatarVersion, avatars, chats, config, contactNames, demo, isUnread, loadMedia, offline, openThread, phase, reloadConfig, saveTranscript, searchTargets, sendReaction, sendText, sendVoice, syncing, threads, transcripts],
   );
 }

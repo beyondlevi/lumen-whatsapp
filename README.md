@@ -62,6 +62,11 @@ The app uses only arrow keys, Enter, and Escape (the Neural Band / Rokid gesture
 | Chats | Up / Down | Move between chats |
 | Chats | Enter | Open the chat |
 | Chats | Escape | Not handled by the app, so the platform closes it |
+| Chats | Up from the first chat, Enter | Voice search (the row above the chats; only when the device offers speech recognition) |
+| Voice search | (speak), then pause or Enter on Done | Ends the listening; the matching chats and contacts are listed, best first, with the first one focused |
+| Voice search results | Enter | Opens the chat (or a new conversation with a contact); Back from it returns to the list |
+| Voice search | Enter on Try again / Search again | Listens again |
+| Voice search | Escape | Back to the list (stops listening) |
 | Conversation | Up / Down | Move between the message bubbles (scrolls history) and the action rail |
 | Conversation, on a message taller than the screen | Down / Up | Scroll through that message, half a screen per press, until its end (Down) or start (Up) is in view; the next press goes on to the next/previous message. A long message reached with Down opens at its start, with Up at its end |
 | Conversation | Enter on Reply | Opens the reply field, focused |
@@ -131,7 +136,9 @@ In demo mode:
   (`src/demo/assets`). The app reads them from its own origin when they are viewed or played;
 - the app reads and writes no storage. The chat cache, the read marks, the picture cache and the development
   config are left as they are, and every launch starts from the same unread chats;
-- the copy is in English whatever the device language.
+- the copy is in English whatever the device language;
+- voice search is always offered, with a simulated recognizer that "hears" *Maia* (one letter off) and
+  lists Maya Chen first, with no microphone.
 
 The only request outside the package origin is the Toolkit's Noto Sans stylesheet
 (`fonts.googleapis.com`), which `<App>` adds in both modes before the configuration is read.
@@ -155,7 +162,7 @@ The instance name is a path segment encoded with `encodeURIComponent`, so a spac
 | Call | Body | Response used |
 |---|---|---|
 | `POST /chat/findChats/{instance}` | `{"take": 40}` | array of `{remoteJid, pushName, updatedAt, unreadCount, lastMessage}`, most recent first |
-| `POST /chat/findContacts/{instance}` | `{"where": {}}` | array of `{remoteJid, pushName}`; requested only when a chat has no name |
+| `POST /chat/findContacts/{instance}` | `{"where": {}}` | array of `{remoteJid, pushName}`; requested when a chat has no name, and once per session by voice search (contacts with a name and a `@s.whatsapp.net` or `@g.us` JID) |
 | `POST /chat/findMessages/{instance}` | `{"where": {"key": {"remoteJid": "<jid>"}}, "page": 1, "offset": 30}` | `{messages: {total, pages, currentPage, records: [...]}}`, newest first |
 | `POST /message/sendText/{instance}` | `{"number": "<jid>", "text": "…"}`, plus `"quoted": {"key": {"id", "fromMe", "remoteJid"}, "message": {"conversation": "…"}}` when replying to a message | 201, the sent message (`key`, `messageTimestamp`, `status: "PENDING"`) |
 | `POST /message/sendReaction/{instance}` | `{"key": {"id", "fromMe", "remoteJid", "participant"?}, "reaction": "👍"}` (`participant` for group messages) | 201; failures show a Toast |
@@ -261,6 +268,40 @@ interface LumenRecording {
   - a fixed English transcript delivered word by word;
   - no microphone, no network, no storage.
 
+## Voice search
+
+The row **Voice search** above the chats (one Up from the first chat, which keeps the initial focus)
+opens `/search`, which listens for a name and lists the chats and contacts that match it.
+
+Speech (`src/search/voiceInput.ts`), from what the page has, best first:
+
+1. `SpeechRecognition` / `webkitSpeechRecognition` (Lumen's shim serves it with the dictation engine
+   chosen in the companion): `lang` is `navigator.language` (the engine may use its own), one phrase
+   (`continuous: false`), `interimResults: true`. The partial text is shown as it comes; a pause (the
+   engine's end of speech) or Enter on **Done** (`stop()`) ends it; Back calls `abort()`.
+2. `window.lumen.audio`: `record({maxMs: 10000})`, ended after 1.2 s below level 0.06 that follows speech
+   (level ≥ 0.1), after 6 s with nothing said, or by **Done**; then `transcribe(blob, {language:
+   navigator.language, onPartial})`, whose partial text is shown.
+
+With neither (a desktop browser without speech, Meta Ray-Ban Display's browser today), the row is not
+shown. A recognizer that fails as unavailable (`not-allowed`, `service-not-allowed`, `audio-capture`,
+`language-not-supported`, or Lumen's `unavailable`) is not used again in the session: the next one takes
+over at once, and with none left the screen says so and the row disappears.
+
+Matching (`src/search/nameMatch.ts`) ignores accents, case and punctuation, and the words said around a
+name in English and Portuguese ("conversa com a Carla", "open the chat with Maya"). Each spoken word takes
+the best word of the name: exact 1, a prefix of three letters or more 0.85, one letter wrong, missing,
+extra or swapped 0.8 (for words of three letters or more), a prefix with one mistake 0.65, two mistakes in
+words of seven letters or more 0.6. The score averages the spoken words, weighs how much of the name was
+said, and adds a little when the first word matches the first name. Names said joined or split
+("anapaula" / "Ana Paula") and four or more digits of a phone number also match. Below 0.5 nothing is
+listed; equal scores list recent chats first, then contacts. Up to eight results.
+
+Candidates are the list's chats and the saved contacts (`findContacts`, fetched once per session while
+the wearer speaks). A contact without a chat opens an empty conversation under the contact's name; the
+first reply starts the chat. Opening a result replaces the search in the history, so Back from the chat
+returns to the list.
+
 ## Development
 
 ```sh
@@ -291,7 +332,7 @@ The build targets Chromium 95 (the system WebView) and Firefox 115+ (GeckoView i
 ## Tests
 
 ```sh
-npm test                                          # unit tests (parsing, client, config contract, i18n)
+npm test                                          # unit tests (parsing, client, config contract, i18n, name matching, voice input)
 npx playwright install chromium firefox           # once
 npm run package && npm run test:e2e               # keyboard-only E2E, Chromium + Firefox, against the mock
 ```
@@ -311,6 +352,13 @@ calls to the mock. It covers:
 - the conversation rail, the Reply field and Back closing it, and the message menu (reaction and quoted reply);
 - the `window.lumen.config` contract (`get` and `onChange`);
 - pt-PT;
+- voice search (`tests/e2e/fakeSpeech.mjs` scripts a `SpeechRecognition`; `fakeAudio.mjs` the
+  `window.lumen.audio` path, with a pause): the row hidden without speech, one Up from the first chat,
+  partial text, a one-letter mistake ("Carla Diaz"), no accents ("familia"), a contact without a chat
+  (Bruno Lima, whose first message adds the chat to the list), no match and Try again, Done, Search again, no speech, Back aborting the recognizer, a
+  recognizer refused as unavailable (the row then hidden, or `window.lumen.audio` taking over), and pt-PT
+  (`lang: 'pt-PT'`); in Chromium and Firefox. Native recognizers are removed from every test page, so
+  Chromium's own (Google's) never runs;
 - long messages (the first, the middle and the last of five are taller than the screen): Down and Up scroll
   through each one before going on, the list never jumps on the way (every scroll position is recorded),
   and the message menu keeps the reading place (`tests/e2e/longMessages.mjs`, shared with lumen-telegram);

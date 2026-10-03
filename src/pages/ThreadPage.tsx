@@ -65,12 +65,14 @@ function useHeaderHeight(pageRef: {current: PageHandle | null}): number {
 }
 
 function Thread({jid}: {jid: string}) {
-  const {chatFor, thread, openThread, sendText, sendReaction, offline, avatarFor, requestAvatar, loadMedia, audio: lumenAudio, transcriptFor} =
+  const {chatFor, thread, openThread, sendText, sendReaction, offline, avatarFor, requestAvatar, loadMedia, audio: lumenAudio, transcriptFor, contactName} =
     useWhatsApp();
   const location = useLocation();
   const navigate = useNavigate();
   const chat = chatFor(jid);
-  const name = chatDisplayName(jid, chat?.name);
+  // A contact found by voice search may have no conversation in the list yet.
+  const savedName = chat?.name ?? contactName(jid);
+  const name = chatDisplayName(jid, savedName);
   const {loaded, synced, messages: records} = thread(jid);
   const isGroup = chat?.isGroup ?? isGroupJid(jid);
   const {messages, reactions} = useMemo(() => splitReactions(records), [records]);
@@ -224,7 +226,7 @@ function Thread({jid}: {jid: string}) {
       headerText={name}
       headerShowAvatar
       headerAvatarSrc={avatar ?? undefined}
-      headerAvatarPrimaryContent={avatar ? undefined : avatarFallback(chat?.name, isGroup)}
+      headerAvatarPrimaryContent={avatar ? undefined : avatarFallback(savedName, isGroup)}
       headerAvatarAlt={name}
       headerIsLoading={!synced}
       headerMetadata={offline && synced ? t('offlineMeta') : undefined}

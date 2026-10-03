@@ -2,7 +2,7 @@
   "id": "cloud.bynd.lumen.whatsapp",
   "name": "WhatsApp for Lumen",
   "short_name": "WhatsApp",
-  "version": "0.4.2",
+  "version": "0.5.0",
   "description": "Read and answer WhatsApp chats through an Evolution API server.",
   "lang": "en",
   "start_url": "./",

@@ -14,6 +14,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {unzipSync} from 'fflate';
 import {MOCK_API_KEY, MOCK_INSTANCE, startMockServer} from '../../mock/server.mjs';
+import {fakeSpeechScript} from './fakeSpeech.mjs';
 import {LONG_THREAD, longMessageScenario} from './longMessages.mjs';
 import {startStaticServer} from './static-server.mjs';
 
@@ -116,7 +117,8 @@ try {
   assert.match(await active(), /Carla Dias/, 'focus returns to the chat that was open');
   // The next refresh moves Carla (latest message) to the top; focus moves with it.
   await page.waitForFunction(
-    () => document.querySelector('[role="button"][aria-label]')?.getAttribute('aria-label')?.startsWith('Carla Dias, You:'),
+    // The first chat row (Chromium has a recognizer of its own, so Voice search is above it).
+    () => [...document.querySelectorAll('[role="button"][aria-label]')].map(row => row.getAttribute('aria-label')).find(label => !label.startsWith('Voice search'))?.startsWith('Carla Dias, You:'),
     {timeout: 8000},
   );
   assert.match(await active(), /Carla Dias/);
@@ -141,6 +143,30 @@ try {
   });
   assert.deepEqual(problems, []);
   console.log(`ok   [chromium 95] long messages: ${JSON.stringify(steps)}`);
+
+  // Voice search with a scripted SpeechRecognition: "Carla Diaz" (one letter off) lists Carla Dias first.
+  await page.evaluateOnNewDocument(fakeSpeechScript());
+  await post('/__mock/reset', {});
+  await page.goto('http://127.0.0.1:5501/');
+  await waitText('Carla Dias');
+  await page.waitForTimeout(800);
+  assert.match(await active(), /Ana Souza/, 'the first chat keeps the initial focus');
+  await page.evaluate(() => (window.__speechControl.next = {text: 'Carla Diaz'}));
+  await press('ArrowUp');
+  assert.match(await active(), /Voice search/);
+  await press('Enter');
+  await waitText('Listening…');
+  for (let waited = 0; !/Carla Dias/.test(await active()); waited += 200) {
+    assert.ok(waited < 8000, `results: ${await active()}`);
+    await page.waitForTimeout(200);
+  }
+  await page.waitForTimeout(800);
+  await page.screenshot({path: path.join(outDir, 'chromium95-voice-search.png')});
+  await press('Enter');
+  await waitText('Me manda o endereço?');
+  assert.match(new URL(page.url()).pathname, /^\/chat\/5511999990003/);
+  assert.deepEqual(problems, []);
+  console.log('ok   [chromium 95] voice search: SpeechRecognition, one-letter mistake, open the chat');
 } catch (error) {
   console.log(`FAIL [chromium 95] ${error.message}\n${problems.join('\n')}`);
   process.exitCode = 1;
