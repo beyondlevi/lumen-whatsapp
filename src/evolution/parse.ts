@@ -89,6 +89,21 @@ export function phoneFromJid(jid: string | null | undefined): string | null {
   return match ? `+${match[1]}` : null;
 }
 
+/**
+ * One key per WhatsApp account across JID spellings: without a device suffix
+ * (`:12`), and for Brazilian mobiles with or without the ninth digit
+ * (`55 11 9xxxx-xxxx` and the older `55 11 xxxx-xxxx` are the same person).
+ */
+export function accountKey(jid: string): string {
+  const [user = '', server = ''] = jid.toLowerCase().split('@');
+  const bare = user.split(':')[0];
+  if (server !== 's.whatsapp.net') {
+    return `${bare}@${server}`;
+  }
+  const brazilianMobile = /^55(\d{2})9?([6-9]\d{7})$/.exec(bare);
+  return brazilianMobile ? `55${brazilianMobile[1]}9${brazilianMobile[2]}@s.whatsapp.net` : `${bare}@${server}`;
+}
+
 /** Evolution stores seconds; accept seconds, milliseconds, numeric strings, Long-like objects, and ISO strings. */
 export function toMillis(value: unknown): number | null {
   let numeric: number | null = null;

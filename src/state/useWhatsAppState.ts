@@ -4,6 +4,7 @@ import type {ConfigField} from '../config/lumenConfig';
 import {createDemoClient} from '../demo/demoClient';
 import {EvolutionClient, EvolutionError, isAbortError, type EvolutionApi} from '../evolution/client';
 import {
+  accountKey,
   parseChats,
   parseContactList,
   parseContacts,
@@ -16,7 +17,7 @@ import {
   type ContactNames,
 } from '../evolution/parse';
 import {chatDisplayName, chatPreview, describeContent} from '../format';
-import type {SearchTarget} from '../search/searchTargets';
+import {uniqueTargets, type SearchTarget} from '../search/searchTargets';
 import {setLocaleOverride, t} from '../i18n/strings';
 import {cacheAccount, loadChatCache, saveChatCache} from './chatCache';
 import {loadReadMarks, saveReadMarks, type ReadMarks} from './readMarks';
@@ -640,13 +641,11 @@ export function useWhatsAppState(): WhatsAppState {
     } catch {
       // Without contacts, the chats alone are searched.
     }
-    const inChats = new Set(chatTargets.map(target => target.id));
-    return [
-      ...chatTargets,
-      ...contacts
-        .filter(contact => !inChats.has(contact.jid))
-        .map(contact => ({id: contact.jid, name: contact.name, phone: phoneFromJid(contact.jid), isGroup: contact.isGroup, detail: null, inChats: false})),
-    ];
+    return uniqueTargets(
+      chatTargets,
+      contacts.map(contact => ({id: contact.jid, name: contact.name, phone: phoneFromJid(contact.jid), isGroup: contact.isGroup, detail: null, inChats: false})),
+      accountKey,
+    );
   }, [client]);
 
   const isUnread = useCallback(

@@ -7,7 +7,7 @@ import {
   TimestampTextColor,
   VerticalList,
 } from '@wearables-ui-toolkit/mrbd';
-import {useEffect} from 'react';
+import {useEffect, useRef} from 'react';
 import {useNavigate} from 'react-router-dom';
 import {avatarFallback} from '../components/avatarFallback';
 import {chatDisplayName, chatPreview, formatListTime} from '../format';
@@ -19,6 +19,19 @@ import {ChatListEmptyPage} from './ChatListEmptyPage';
 import {DEMO_SEARCH_PHRASE, SEARCH_PATH} from './SearchPage';
 import {StatusPage} from './StatusPage';
 
+// From launch until the wearer first presses a key, the newest chat keeps the
+// focus: the list shows the cached chats at once and the refresh that follows
+// re-sorts them, which would otherwise carry the focus down with the chat that
+// was first in the cache.
+const launch = {untouched: true};
+if (typeof document !== 'undefined') {
+  const touched = () => {
+    launch.untouched = false;
+  };
+  document.addEventListener('keydown', touched, {capture: true, once: true});
+  document.addEventListener('pointerdown', touched, {capture: true, once: true});
+}
+
 export function chatPath(jid: string): string {
   return `/chat/${encodeURIComponent(jid)}`;
 }
@@ -29,6 +42,16 @@ export function ChatListPage() {
   const voice = useVoiceInput(demo ? DEMO_SEARCH_PHRASE : null);
 
   const rows = useReturnOrder(chats, listOrder);
+  const firstChatRef = useRef<HTMLDivElement>(null);
+  const order = rows.map(chat => chat.jid).join(' ');
+  useEffect(() => {
+    const first = firstChatRef.current;
+    const focused = document.activeElement;
+    const list = first?.closest('[data-uit-focus-boundary-root]');
+    if (launch.untouched && first != null && focused instanceof HTMLElement && focused !== first && list?.contains(focused)) {
+      first.focus();
+    }
+  }, [order]);
 
   // Profile pictures load once per chat while the list is shown.
   useEffect(() => {
@@ -61,13 +84,14 @@ export function ChatListPage() {
             onClick={() => navigate(SEARCH_PATH)}
           />
         ) : null}
-        {rows.map(chat => {
+        {rows.map((chat, index) => {
           const name = chatDisplayName(chat.jid, chat.name);
           const unread = isUnread(chat);
           const picture = avatarFor(chat.jid);
           return (
             <ListItem
               key={chat.jid}
+              ref={index === 0 ? firstChatRef : undefined}
               title={name}
               subtitle={chatPreview(chat, thread(chat.jid).messages)}
               timestamp={formatListTime(chat.timestamp)}

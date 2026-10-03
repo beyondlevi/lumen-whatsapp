@@ -28,7 +28,7 @@ export function SearchResults({text, matches, firstRef, avatarFor, onOpen, onAga
               key={item.id}
               ref={index === 0 ? firstRef : undefined}
               title={item.name}
-              subtitle={item.inChats ? item.detail ?? undefined : t('searchContact')}
+              subtitle={item.inChats ? item.detail ?? undefined : item.phone ? t('searchContactPhone', {phone: item.phone}) : t('searchContact')}
               avatarSrc={picture ?? undefined}
               avatarPrimaryContent={picture ? undefined : avatarFallback(item.name, item.isGroup)}
               avatarAlt={item.name}

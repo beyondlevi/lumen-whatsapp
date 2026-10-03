@@ -101,6 +101,11 @@ function seed() {
     {remoteJid: carla, pushName: 'Carla Dias', type: 'contact'},
     {remoteJid: bruno, pushName: 'Bruno Lima', type: 'group_member'},
     {remoteJid: diego, pushName: 'Diego Alves', type: 'contact'},
+    // Saved twice, as Evolution returns some accounts: Bruno also under his
+    // number without the ninth digit, and a community with its announcements group.
+    {remoteJid: '551199990002@s.whatsapp.net', pushName: 'Bruno Lima', type: 'contact'},
+    {remoteJid: '120363000000000009@g.us', pushName: 'Comunidade Lovable Day', type: 'group'},
+    {remoteJid: '120363000000000010@g.us', pushName: 'Comunidade Lovable Day', type: 'group'},
   ];
   // Chat.name (returned as pushName by findChats on v2.3.x): null for Carla and Diego.
   const chatNames = {[ana]: 'Ana Souza', [family]: 'Família'};

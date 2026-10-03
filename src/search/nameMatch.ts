@@ -14,7 +14,7 @@ export type NameCandidate<T> = {
 export type NameMatch<T> = {item: T; name: string; score: number};
 
 /** Below this a candidate is not listed. */
-export const MIN_SCORE = 0.5;
+export const MIN_SCORE = 0.55;
 const MAX_RESULTS = 8;
 
 // Words said around a name, in English and Portuguese ("open the chat with

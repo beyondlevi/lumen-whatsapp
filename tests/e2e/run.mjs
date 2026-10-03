@@ -1011,7 +1011,9 @@ async function voiceSearchFlow(browser, label) {
     await willHear(page, {text: 'bruno lima'});
     await pressUntil(page, 'ArrowUp', /Voice search/);
     await press(page, 'Enter');
-    await waitForFocus(page, /^div\|Bruno Lima, Contact/, 6000);
+    await waitForFocus(page, /^div\|Bruno Lima, Contact · \+5511999990002/, 6000);
+    // Saved under two numbers (with and without the ninth digit): one row.
+    assert.equal((await resultRows(page)).filter(row => row.startsWith('Bruno Lima')).length, 1, `one Bruno: ${await resultRows(page)}`);
     await press(page, 'Enter');
     await page.waitForURL(`**/chat/${encodeURIComponent(BRUNO)}`);
     await page.waitForTimeout(1500);
@@ -1030,6 +1032,16 @@ async function voiceSearchFlow(browser, label) {
     await press(page, 'Escape');
     await page.waitForURL(url => new URL(url).pathname === '/');
     await page.getByText('Bruno Lima').first().waitFor({state: 'visible', timeout: 12000});
+
+    // A community and its announcements group (same name): one row.
+    await page.waitForTimeout(800);
+    await willHear(page, {text: 'comunidade lovable day'});
+    await pressUntil(page, 'ArrowUp', /Voice search/);
+    await press(page, 'Enter');
+    await waitForFocus(page, /^div\|Comunidade Lovable Day, Contact/, 6000);
+    assert.deepEqual((await resultRows(page)).map(row => row.split(',')[0]), ['Comunidade Lovable Day', 'Search again'], 'listed once');
+    await press(page, 'Escape');
+    await page.waitForURL(url => new URL(url).pathname === '/');
 
     // No accents, several results: Família first; Back returns to the list.
     await page.waitForTimeout(800);
@@ -1334,6 +1346,48 @@ async function run() {
             !(await page.evaluate(() => localStorage.getItem('lumen-whatsapp.chat-cache.v1') ?? '')).includes('mock-api-key'),
             'the API key is not in the chat cache',
           );
+        } finally {
+          await context.close();
+        }
+      });
+
+      await test('[chromium] launch from the cache: the newest chat keeps the focus when the refresh re-sorts the list', async () => {
+        await mockPost('/__mock/reset');
+        const {context, page, problems} = await newPage(browser, {speech: true});
+        try {
+          await page.goto(`${APP}/?${configQuery()}`);
+          await waitForText(page, 'Carla Dias');
+          await page.waitForTimeout(1500);
+          await page.close();
+          // While the app is closed, four other chats get newer messages.
+          for (const jid of [DIEGO, CARLA, FAMILY, '123456789012345@lid']) {
+            await mockPost('/__mock/incoming', {remoteJid: jid, text: `Nova ${jid.slice(0, 4)}`, pushName: 'Someone'});
+            await new Promise(resolve => setTimeout(resolve, 1100));
+          }
+          const next = await context.newPage();
+          next.on('pageerror', error => problems.push(`pageerror: ${error.message}`));
+          // A slow link: the cached list shows (and takes the focus) before the refresh.
+          await next.route('**/chat/findChats/**', async route => {
+            await new Promise(resolve => setTimeout(resolve, 2500));
+            await route.continue();
+          });
+          await next.goto(`${APP}/`);
+          await waitForFocus(next, /^div\|Ana Souza, /, 3000);
+          await waitForText(next, 'Nova 1203', 10000);
+          await next.waitForTimeout(800);
+          const rows = (await rowLabels(next)).map(row => row.split(',')[0]);
+          assert.equal(rows[1], 'Someone', `re-sorted: ${rows}`);
+          assert.equal(rows.at(-1), 'Ana Souza', `re-sorted: ${rows}`);
+          assert.match(await activeLabel(next), /^div\|Someone, Nova 1234/, 'the newest chat has the focus');
+          await next.screenshot({path: path.join(outDir, 'cached-launch-resorted.png')});
+          // Once the wearer moves, the focus stays with the chosen chat.
+          await press(next, 'ArrowDown');
+          assert.match(await activeLabel(next), /^div\|Família, /);
+          await mockPost('/__mock/incoming', {remoteJid: DIEGO, text: 'Mais uma', pushName: 'Diego Alves'});
+          await waitForText(next, 'Mais uma', 12000);
+          await next.waitForTimeout(500);
+          assert.match(await activeLabel(next), /^div\|Família, /, 'a later refresh does not move it');
+          assert.deepEqual(problems, []);
         } finally {
           await context.close();
         }

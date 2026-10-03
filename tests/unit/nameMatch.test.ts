@@ -85,6 +85,13 @@ describe('rankByName', () => {
     expect(top('99999 0007')[0]).toBe('number');
   });
 
+  it('needs more than one of two spoken words', () => {
+    // "Ana Ferreira": only "Ana" matches Ana Souza.
+    expect(top('Ana Ferreira')).not.toContain('ana');
+    expect(nameScore('comunidade vintage', 'Comunidade Lovable Day')).toBeLessThan(0.55);
+    expect(nameScore('comunidade vintage', 'Comunidade Vintage Time - 02')).toBeGreaterThan(0.8);
+  });
+
   it('returns nothing for an unknown name', () => {
     expect(top('Bruno')).toEqual([]);
     expect(top('')).toEqual([]);

@@ -62,6 +62,7 @@ The app uses only arrow keys, Enter, and Escape (the Neural Band / Rokid gesture
 | Chats | Up / Down | Move between chats |
 | Chats | Enter | Open the chat |
 | Chats | Escape | Not handled by the app, so the platform closes it |
+| Chats (on launch) | — | The newest chat has the focus, also when the cached list is re-sorted by the first refresh, until the first key |
 | Chats | Up from the first chat, Enter | Voice search (the row above the chats; only when the device offers speech recognition) |
 | Voice search | (speak), then pause or Enter on Done | Ends the listening; the matching chats and contacts are listed, best first, with the first one focused |
 | Voice search results | Enter | Opens the chat (or a new conversation with a contact); Back from it returns to the list |
@@ -294,11 +295,15 @@ the best word of the name: exact 1, a prefix of three letters or more 0.85, one 
 extra or swapped 0.8 (for words of three letters or more), a prefix with one mistake 0.65, two mistakes in
 words of seven letters or more 0.6. The score averages the spoken words, weighs how much of the name was
 said, and adds a little when the first word matches the first name. Names said joined or split
-("anapaula" / "Ana Paula") and four or more digits of a phone number also match. Below 0.5 nothing is
-listed; equal scores list recent chats first, then contacts. Up to eight results.
+("anapaula" / "Ana Paula") and four or more digits of a phone number also match. Below 0.55 nothing is
+listed (so of two spoken words one alone is not enough); equal scores list recent chats first, then contacts. Up to eight results.
 
 Candidates are the list's chats and the saved contacts (`findContacts`, fetched once per session while
-the wearer speaks). A contact without a chat opens an empty conversation under the contact's name; the
+the wearer speaks). Each account is listed once: chats first, then the contacts that are not the same
+account as a chat or an earlier contact (`accountKey`: without a device suffix, and Brazilian mobiles with or
+without the ninth digit), whose name is not a chat's, and groups not named like an earlier contact group (a
+community and its announcements group share the name). People with the same name and different numbers all
+stay, and a contact's row shows its number. A contact without a chat opens an empty conversation under the contact's name; the
 first reply starts the chat. Opening a result replaces the search in the history, so Back from the chat
 returns to the list.
 
@@ -352,10 +357,13 @@ calls to the mock. It covers:
 - the conversation rail, the Reply field and Back closing it, and the message menu (reaction and quoted reply);
 - the `window.lumen.config` contract (`get` and `onChange`);
 - pt-PT;
+- the cached launch re-sorted by the first refresh (a slow `findChats`): the newest chat keeps the focus until
+  the first key, and later refreshes leave it where the wearer put it;
 - voice search (`tests/e2e/fakeSpeech.mjs` scripts a `SpeechRecognition`; `fakeAudio.mjs` the
   `window.lumen.audio` path, with a pause): the row hidden without speech, one Up from the first chat,
   partial text, a one-letter mistake ("Carla Diaz"), no accents ("familia"), a contact without a chat
-  (Bruno Lima, whose first message adds the chat to the list), no match and Try again, Done, Search again, no speech, Back aborting the recognizer, a
+  (Bruno Lima, saved under two numbers and listed once, whose first message adds the chat to the list), a
+  community and its announcements group listed once, no match and Try again, Done, Search again, no speech, Back aborting the recognizer, a
   recognizer refused as unavailable (the row then hidden, or `window.lumen.audio` taking over), and pt-PT
   (`lang: 'pt-PT'`); in Chromium and Firefox. Native recognizers are removed from every test page, so
   Chromium's own (Google's) never runs;
