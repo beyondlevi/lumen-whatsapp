@@ -14,6 +14,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {unzipSync} from 'fflate';
 import {MOCK_API_KEY, MOCK_INSTANCE, startMockServer} from '../../mock/server.mjs';
+import {LONG_THREAD, longMessageScenario} from './longMessages.mjs';
 import {startStaticServer} from './static-server.mjs';
 
 const puppeteer = (await import('puppeteer-core')).default;
@@ -121,6 +122,25 @@ try {
   assert.match(await active(), /Carla Dias/);
   assert.deepEqual(problems, []);
   console.log('ok   [chromium 95] offline package: list, Reply field, dictated reply, bubble menu reaction, Back');
+
+  // Long messages (first, middle, last): Down/Up scroll through each before moving on.
+  const eva = '5511999990009@s.whatsapp.net';
+  const post = (pathname, body) =>
+    fetch(`http://127.0.0.1:8089${pathname}`, {method: 'POST', headers: {'Content-Type': 'application/json', apikey: MOCK_API_KEY}, body: JSON.stringify(body)});
+  await post('/__mock/reset', {});
+  for (const text of LONG_THREAD) await post('/__mock/incoming', {remoteJid: eva, text, pushName: 'Eva Prado'});
+  await page.goto(`http://127.0.0.1:5501/chat/${encodeURIComponent(eva)}`);
+  await waitText('short two');
+  await page.waitForTimeout(1200);
+  await press('ArrowDown');
+  await press('ArrowLeft');
+  await page.waitForTimeout(600);
+  const steps = await longMessageScenario(page, {
+    screenshot: name => page.screenshot({path: path.join(outDir, `chromium95-${name}.png`)}),
+    deliver: text => post('/__mock/incoming', {remoteJid: eva, text, pushName: 'Eva Prado'}),
+  });
+  assert.deepEqual(problems, []);
+  console.log(`ok   [chromium 95] long messages: ${JSON.stringify(steps)}`);
 } catch (error) {
   console.log(`FAIL [chromium 95] ${error.message}\n${problems.join('\n')}`);
   process.exitCode = 1;

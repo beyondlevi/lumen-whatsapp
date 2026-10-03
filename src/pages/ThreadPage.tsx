@@ -22,6 +22,7 @@ import {chatDisplayName, describeContent, endsMessageRun, snippet, startsMessage
 import {t} from '../i18n/strings';
 import {splitReactions} from '../reactions';
 import {useAudioPlayer} from '../state/useAudioPlayer';
+import {useLongMessageScroll} from '../state/useLongMessageScroll';
 import {useWhatsApp} from '../WhatsAppProvider';
 import {recordPath} from './RecordPage';
 import {StatusPage} from './StatusPage';
@@ -147,6 +148,8 @@ function Thread({jid}: {jid: string}) {
 
   // Marks the end of the conversation (below the newest bubble and its time).
   const endRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const longMessages = useLongMessageScroll(listRef);
   const lastMessageId = messages.length ? messages[messages.length - 1].id : null;
   const lastMessageFromMe = messages.length ? messages[messages.length - 1].fromMe : false;
 
@@ -173,10 +176,11 @@ function Thread({jid}: {jid: string}) {
       return;
     }
     if (!revealedRef.current || endVisibleRef.current || lastMessageFromMe) {
+      longMessages.release();
       endRef.current?.scrollIntoView({block: 'end'});
       revealedRef.current = true;
     }
-  }, [lastMessageId, lastMessageFromMe]);
+  }, [lastMessageId, lastMessageFromMe, longMessages]);
 
   const handleSend = useCallback(
     (text: string) => {
@@ -228,8 +232,10 @@ function Thread({jid}: {jid: string}) {
       {/* The conversation starts below the header so no message runs under it. */}
       <div
         className={headerHeight > 0 ? 'thread-shell thread-shell--below-header' : 'thread-shell'}
-        style={headerHeight > 0 ? ({'--thread-header-height': `${headerHeight}px`} as CSSProperties) : undefined}>
+        style={headerHeight > 0 ? ({'--thread-header-height': `${headerHeight}px`} as CSSProperties) : undefined}
+        {...longMessages.handlers}>
         <VerticalList
+          ref={listRef}
           insetForHeader={headerHeight === 0}
           contentClassName="message-list"
           ariaLabel={t('threadLabel', {name})}>

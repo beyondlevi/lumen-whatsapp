@@ -63,6 +63,7 @@ The app uses only arrow keys, Enter, and Escape (the Neural Band / Rokid gesture
 | Chats | Enter | Open the chat |
 | Chats | Escape | Not handled by the app, so the platform closes it |
 | Conversation | Up / Down | Move between the message bubbles (scrolls history) and the action rail |
+| Conversation, on a message taller than the screen | Down / Up | Scroll through that message, half a screen per press, until its end (Down) or start (Up) is in view; the next press goes on to the next/previous message. A long message reached with Down opens at its start, with Up at its end |
 | Conversation | Enter on Reply | Opens the reply field, focused |
 | Reply field | Enter | On the glasses: opens the platform's dictation composer. In a desktop browser: sends the text (UI Toolkit `InputTextView` behavior) |
 | Reply field | Right, then Enter | Send (the path to use on the glasses after dictating); the field closes |
@@ -310,6 +311,9 @@ calls to the mock. It covers:
 - the conversation rail, the Reply field and Back closing it, and the message menu (reaction and quoted reply);
 - the `window.lumen.config` contract (`get` and `onChange`);
 - pt-PT;
+- long messages (the first, the middle and the last of five are taller than the screen): Down and Up scroll
+  through each one before going on, the list never jumps on the way (every scroll position is recorded),
+  and the message menu keeps the reading place (`tests/e2e/longMessages.mjs`, shared with lumen-telegram);
 - the unzipped `.mrbd.zip` with every other origin blocked;
 - profile pictures (from `findChats`, from `fetchProfilePictureUrl`, a broken URL keeping the initials, and
   the cache on the next launch), the full-screen photo (View first, Back to the same bubble, failure with
@@ -320,9 +324,11 @@ calls to the mock. It covers:
   data appears on screen and that storage is left unchanged. It also switches demo mode on and off while
   the app is open.
 
-`E2E_TRACE=1` prints the focused element after each key of the capture script.
+`E2E_TRACE=1` prints the focused element after each key of the capture script. `E2E_ONLY=<regex>` runs
+only the tests whose name matches (e.g. `E2E_ONLY='long messages'`).
 
-A smoke test for a real Chromium 95 (Android System WebView version) is in `tests/e2e/chromium95.mjs`; its
+A smoke test for a real Chromium 95 (Android System WebView version), which also runs the long-message
+scenario, is in `tests/e2e/chromium95.mjs`; its
 header lists the setup.
 
 CI (`.github/workflows/ci.yml`) runs the unit tests, `npm run package`, and the E2E suite. It uploads

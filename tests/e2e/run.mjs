@@ -17,6 +17,7 @@ import {unzipSync} from 'fflate';
 import {chromium, firefox} from 'playwright';
 import {MOCK_API_KEY, MOCK_INSTANCE, startMockServer} from '../../mock/server.mjs';
 import {fakeAudioScript} from './fakeAudio.mjs';
+import {LONG_THREAD, longMessageScenario} from './longMessages.mjs';
 import {startStaticServer} from './static-server.mjs';
 
 const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../..');
@@ -26,6 +27,7 @@ const APP = 'http://127.0.0.1:4173';
 const PACKAGE_APP = 'http://127.0.0.1:5500';
 const ANA = '5511999990001@s.whatsapp.net';
 const CARLA = '5511999990003@s.whatsapp.net';
+const EVA = '5511999990009@s.whatsapp.net';
 const browsers = (process.env.E2E_BROWSERS ?? 'chromium,firefox').split(',');
 const results = [];
 
@@ -123,6 +125,8 @@ async function escapeReachesHost(page) {
 }
 
 async function test(name, fn) {
+  // E2E_ONLY=<regex> runs only the matching tests (e.g. E2E_ONLY='long messages').
+  if (process.env.E2E_ONLY && !new RegExp(process.env.E2E_ONLY).test(name)) return;
   const started = Date.now();
   try {
     await fn();
@@ -883,6 +887,33 @@ async function voiceFlow(browser) {
   }
 }
 
+/** A conversation whose first, middle and last messages are taller than the screen. */
+async function longMessagesFlow(browser, label) {
+  await mockPost('/__mock/reset');
+  for (const text of LONG_THREAD) {
+    await mockPost('/__mock/incoming', {remoteJid: EVA, text, pushName: 'Eva Prado'});
+  }
+  const {context, page, problems} = await newPage(browser);
+  try {
+    await page.goto(`${APP}/?${configQuery()}`);
+    await waitForText(page, 'Eva Prado');
+    await page.goto(`${APP}/chat/${encodeURIComponent(EVA)}`);
+    await waitForText(page, 'short two');
+    await page.waitForTimeout(1200);
+    await press(page, 'ArrowDown');
+    await press(page, 'ArrowLeft');
+    await page.waitForTimeout(600);
+    const steps = await longMessageScenario(page, {
+      screenshot: name => page.screenshot({path: path.join(outDir, `${label}-${name}.png`)}),
+      deliver: text => mockPost('/__mock/incoming', {remoteJid: EVA, text, pushName: 'Eva Prado'}),
+    });
+    console.log(`     scroll steps inside each long message: ${JSON.stringify(steps)}`);
+    assert.deepEqual(problems, []);
+  } finally {
+    await context.close();
+  }
+}
+
 async function run() {
   const mockServer = await startMockServer(8089);
   const appServer = await startStaticServer(path.join(root, 'dist'), 4173);
@@ -909,6 +940,8 @@ async function run() {
           const {blocked} = await demoFlow(browser, name, APP, {audioOutput: name !== 'firefox'});
           console.log(`     blocked (Toolkit font only): ${JSON.stringify(blocked)}`);
         });
+
+        await test(`[${name}] long messages (first, middle, last): Down/Up scroll through each before moving on`, () => longMessagesFlow(browser, name));
 
         await test(`[${name}] voice notes: record, send, discard, Back, 2-minute limit, busy/no-phone, transcribe (partials, kept, engine error)`, () => voiceFlow(browser));
 
