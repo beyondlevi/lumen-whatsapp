@@ -1,9 +1,19 @@
 # lumen-whatsapp
 
-WhatsApp client for **Rokid Lumen** glasses, built as a Meta Ray-Ban Display (MRBD) web app with the official
+WhatsApp client for [Rokid Lumen](https://github.com/beyondlevi/rokid-lumen) glasses, built as a Meta Ray-Ban Display (MRBD) web app with the official
 [UI Toolkit for Meta Ray-Ban Display](https://github.com/facebook/meta-ray-ban-display-ui-toolkit-web) and
 backed by an [Evolution API v2](https://github.com/EvolutionAPI/evolution-api) server. The screens follow the
 toolkit's messaging example (`examples/messaging`).
+
+> **Unofficial.** lumen-whatsapp is an independent project. It is not affiliated with, endorsed or
+> sponsored by WhatsApp, Meta Platforms, Inc., or Rokid. WhatsApp is a trademark of WhatsApp LLC,
+> used here only to say what the app works with.
+>
+> **Use at your own risk.** The Evolution API reaches WhatsApp through WhatsApp Web's protocol
+> (Baileys), not an official client or the WhatsApp Business Platform. WhatsApp can limit or ban
+> the number you connect. Use a number you can afford to lose, follow WhatsApp's terms, and don't
+> use it for bulk or unsolicited messages. The software is provided "as is", without warranty (see
+> [LICENSE](LICENSE)).
 
 - **Chats**: profile picture, name, preview, and time for the 40 most recent chats. Unread chats have an
   unread dot on the avatar and an accent-colored time. The last list and the 30 most recent messages of up to 20 chats are
@@ -404,3 +414,16 @@ Chromium and Firefox):
 
 Headless browsers do not replace a test on the glasses (GeckoView and WebView, the dictation composer, and
 the Back gesture).
+
+## License
+
+MIT, see [LICENSE](LICENSE). Copyright (c) 2026 Levi Nóbrega.
+
+Third-party:
+
+- The screens follow the [UI Toolkit for Meta Ray-Ban Display](https://github.com/facebook/meta-ray-ban-display-ui-toolkit-web)'s
+  messaging example, Copyright Meta Platforms, Inc., Apache License 2.0; `src/components/MessageBubble.tsx`
+  is adapted from it. The toolkit packages (`@wearables-ui-toolkit/mrbd`, `foundation`) are Apache-2.0;
+  `@wearables-ui-toolkit/icons`, bundled into the built `.mrbd.zip`, is under the Meta Wearables
+  Developer Terms.
+- Runtime dependencies (React, React Router) are MIT. Build tools keep their own licenses.
