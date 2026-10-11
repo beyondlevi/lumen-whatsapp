@@ -361,6 +361,10 @@ calls to the mock. It covers:
 - a quoted reply;
 - polling, both in the conversation and in the list;
 - Back restoring focus;
+- Back to a long list (65 chats): the list stays mounted, hidden under the routes (`inert`, `aria-hidden`) and
+  out of the D-pad's reach while the chat is open, and comes back with the same row elements and the focus on
+  the chat; the list renders its first rows only and more as the focus goes down; the conversation renders
+  its newest messages and more as the focus goes up;
 - Escape on the list left to the platform;
 - the Setup, Loading…, network, 401, 404 and invalid-URL screens;
 - the cached list on relaunch, with the header spinner until the refresh;
@@ -392,6 +396,36 @@ calls to the mock. It covers:
 
 `E2E_TRACE=1` prints the focused element after each key of the capture script. `E2E_ONLY=<regex>` runs
 only the tests whose name matches (e.g. `E2E_ONLY='long messages'`).
+
+### Navigation speed
+
+The chat list is not rebuilt on Back: it is mounted once, next to the routes, and while a chat (or its
+photo, recorder, transcript, or the search) is open it only goes under them (inert and `aria-hidden`),
+keeping its rows, scroll and drawing. Back brings it back on top in the next frame, then gives the focus to
+the chat the wearer came from. Long lists render in windows: the first 16 rows, then 8 more whenever the
+focus gets within 8 rows of the last one (in idle time). A conversation renders its newest 12 messages, then
+8 older ones whenever the focus gets within 4 of the oldest rendered. Rows and the leaving conversation are
+not drawn again when nothing they show changed. Each opening of a chat is a page of its own for the page
+transition, so it starts at its newest message.
+
+```sh
+npm run build && npm run perf                     # Chromium, CPU throttled 6x, 600x600, mock with 160 extra chats
+PERF_CPU=4 PERF_CHATS=40 npm run perf             # other settings; PERF_OUT=<file.json> keeps every sample
+```
+
+`tests/perf/navigation.mjs` opens a chat (Enter) and goes back (Escape) five times and times each key, from
+the key's event to the end of the first frame where the target screen is fully drawn on top, with the main
+thread's long tasks after it; and the launch until the list is drawn. Measured on 2026-10-11 (median of 5, 160 extra chats, CPU 6x):
+
+| | before (0.5.1) | after |
+| --- | --- | --- |
+| Back from a chat to the list | 5037 ms | 76 ms (70-91) |
+| Opening a chat (page transition included) | 3114 ms | 1310 ms |
+| Launch, list drawn | 4913 ms | 1468 ms |
+| Launch, long tasks in the first 8 s | 5070 ms | 1334 ms |
+
+With the CPU throttled 4x: Back 3275 → 57 ms, opening 2237 → 1029 ms. With 40 extra chats (6x): Back
+2069 → 75 ms.
 
 A smoke test for a real Chromium 95 (Android System WebView version), which also runs the long-message
 scenario, is in `tests/e2e/chromium95.mjs`; its

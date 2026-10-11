@@ -969,6 +969,64 @@ async function resultRows(page) {
   );
 }
 
+/**
+ * Back to a long list: the list stays mounted, hidden and out of reach while
+ * a chat is open, and comes back as it was (same row elements, the focus on
+ * the chat). Rows and messages render in windows that grow with the focus.
+ */
+async function keptListFlow(browser) {
+  await mockPost('/__mock/reset', {extraChats: 60});
+  const {context, page, problems} = await newPage(browser);
+  try {
+    // Every chat in one findChats, past the app's own page size.
+    await page.route('**/chat/findChats/**', route => route.continue({postData: JSON.stringify({take: 1000})}));
+    await page.goto(`${APP}/?${configQuery()}`);
+    await waitForText(page, 'Contact 1');
+    const chatRows = () => page.$$eval('[data-chat]', rows => rows.length);
+    const firstWindow = await chatRows();
+    assert.ok(firstWindow >= 8 && firstWindow <= 16, `first window: ${firstWindow} of 65 chats`);
+
+    await pressUntil(page, 'ArrowDown', /^div\|Contact 3,/, 12);
+    await page.evaluate(() => {
+      document.activeElement.dataset.keptMark = 'yes';
+    });
+    await page.waitForTimeout(500);
+    const rowsAtOpen = await chatRows();
+    await press(page, 'Enter');
+    await waitForText(page, 'Reply');
+    assert.deepEqual(
+      await page.$eval('.kept-page', list => [list.inert, list.getAttribute('aria-hidden'), getComputedStyle(list).zIndex]),
+      [true, 'true', '-1'],
+      'hidden list: inert, aria-hidden, under the routes',
+    );
+    // 30 messages loaded, the newest 12 rendered; Up renders older ones and never reaches the list.
+    await page.waitForFunction(() => document.querySelectorAll('.thread-shell .message-row').length > 0);
+    const messagesAtOpen = await page.$$eval('.thread-shell .message-row', rows => rows.length);
+    assert.ok(messagesAtOpen <= 12, `messages rendered at open: ${messagesAtOpen}`);
+    for (let i = 0; i < 14; i += 1) {
+      await press(page, 'ArrowUp');
+      assert.equal(await page.evaluate(() => document.activeElement?.closest('.kept-page') == null), true, 'focus stays out of the hidden list');
+    }
+    const messagesAfterUp = await page.$$eval('.thread-shell .message-row', rows => rows.length);
+    assert.ok(messagesAfterUp > messagesAtOpen, `older messages rendered: ${messagesAtOpen} -> ${messagesAfterUp}`);
+
+    await page.keyboard.press('Escape');
+    await waitForFocus(page, /^div\|Contact 3,/, 1000);
+    assert.equal(new URL(page.url()).pathname, '/');
+    assert.equal(await page.evaluate(() => document.activeElement.dataset.keptMark), 'yes', 'the same row, not a rebuilt list');
+    assert.equal(await chatRows(), rowsAtOpen, 'no rows added or rebuilt by Back');
+    assert.equal(await page.$eval('.kept-page', list => list.inert || list.getAttribute('aria-hidden') === 'true'), false);
+
+    for (let i = 0; i < 20; i += 1) await press(page, 'ArrowDown', 1);
+    assert.match(await activeLabel(page), /^div\|Contact 2[0-9],/);
+    assert.ok((await chatRows()) > rowsAtOpen, 'more rows as the focus goes down');
+    assert.equal(await escapeReachesHost(page), true, 'Escape on the list still closes the app');
+    assert.deepEqual(problems, []);
+  } finally {
+    await context.close();
+  }
+}
+
 /** Voice search with SpeechRecognition, window.lumen.audio, fallbacks and errors. */
 async function voiceSearchFlow(browser, label) {
   await mockPost('/__mock/reset');
@@ -1196,6 +1254,8 @@ async function run() {
           const {blocked} = await demoFlow(browser, name, APP, {audioOutput: name !== 'firefox'});
           console.log(`     blocked (Toolkit font only): ${JSON.stringify(blocked)}`);
         });
+
+        await test(`[${name}] Back to a long list: kept mounted, focus on the chat; rows and messages in windows`, () => keptListFlow(browser));
 
         await test(`[${name}] voice search: entry point, SpeechRecognition and window.lumen.audio, fuzzy names, contacts, no match, fallback`, () => voiceSearchFlow(browser, name));
 
