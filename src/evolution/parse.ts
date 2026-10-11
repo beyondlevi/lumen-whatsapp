@@ -24,6 +24,11 @@ export type MessageContent = {
   targetId?: string;
   /** Audio: length in seconds, when the message carries it. */
   seconds?: number;
+  /** Photo or video: the small JPEG WhatsApp sends with it (jpegThumbnail), as base64. */
+  thumbnail?: string;
+  /** Photo or video: its size in pixels, when the message carries it. */
+  width?: number;
+  height?: number;
 };
 
 export type ChatMessage = {
@@ -105,6 +110,52 @@ export function accountKey(jid: string): string {
 }
 
 /** Evolution stores seconds; accept seconds, milliseconds, numeric strings, Long-like objects, and ISO strings. */
+/**
+ * A proto `bytes` field (jpegThumbnail) as base64. Evolution 2.3.6+ returns it
+ * from findMessages as base64 (Prisma stores bytes that way); its HTTP answers
+ * and 2.3.3 to 2.3.5 give a Uint8Array serialized as {"0": 255, "1": 216, …};
+ * a Node Buffer serializes as {type: 'Buffer', data: […]}.
+ */
+export function bytesToBase64(value: unknown): string | undefined {
+  if (typeof value === 'string') {
+    const text = value.replace(/\s+/g, '');
+    return text.length > 0 && /^[A-Za-z0-9+/]+={0,2}$/.test(text) ? text : undefined;
+  }
+  let bytes: number[] | null = null;
+  if (Array.isArray(value)) {
+    bytes = value;
+  } else if (value != null && typeof value === 'object') {
+    const object = value as Record<string, unknown>;
+    if (object.type === 'Buffer' && Array.isArray(object.data)) {
+      bytes = object.data;
+    } else {
+      const keys = Object.keys(object);
+      if (keys.length > 0 && keys.every((key, index) => key === String(index))) {
+        bytes = keys.map(key => object[key] as number);
+      }
+    }
+  }
+  if (bytes == null || bytes.length === 0 || !bytes.every(byte => Number.isInteger(byte) && byte >= 0 && byte < 256)) {
+    return undefined;
+  }
+  let binary = '';
+  for (let index = 0; index < bytes.length; index += 0x8000) {
+    binary += String.fromCharCode(...bytes.slice(index, index + 0x8000));
+  }
+  return btoa(binary);
+}
+
+/** The thumbnail and size of a photo or video part, when it has them. */
+function mediaPreview(part: Json): Pick<MessageContent, 'thumbnail' | 'width' | 'height'> {
+  const thumbnail = bytesToBase64(part.jpegThumbnail);
+  const width = typeof part.width === 'number' && part.width > 0 ? part.width : undefined;
+  const height = typeof part.height === 'number' && part.height > 0 ? part.height : undefined;
+  return {
+    ...(thumbnail ? {thumbnail} : {}),
+    ...(width && height ? {width, height} : {}),
+  };
+}
+
 export function toMillis(value: unknown): number | null {
   let numeric: number | null = null;
   if (typeof value === 'number' && Number.isFinite(value)) {
@@ -169,11 +220,11 @@ export function parseContent(messageValue: unknown, messageType?: unknown): Mess
   }
   const image = part('imageMessage');
   if (image) {
-    return {kind: 'photo', text: asString(image.caption) ?? ''};
+    return {kind: 'photo', text: asString(image.caption) ?? '', ...mediaPreview(image)};
   }
   const video = part('videoMessage') ?? part('ptvMessage');
   if (video) {
-    return {kind: 'video', text: asString(video.caption) ?? ''};
+    return {kind: 'video', text: asString(video.caption) ?? '', ...mediaPreview(video)};
   }
   const audioPart = part('audioMessage');
   if (audioPart) {

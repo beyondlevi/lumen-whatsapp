@@ -65,10 +65,21 @@ export async function photoToSend(photo: CapturedPhoto): Promise<Blob> {
 
 /** A small JPEG of the photo for its bubble, as an object URL. */
 export async function photoThumbnail(photo: CapturedPhoto): Promise<string> {
-  const size = fitInside(photo.width, photo.height, THUMBNAIL_SIDE);
-  const bitmap = await createImageBitmap(photo.blob);
+  return URL.createObjectURL((await reduceImage(photo.blob, THUMBNAIL_SIDE)).blob);
+}
+
+/** Longest side of a photo opened in full: the screen is 600 x 600, so nothing larger is decoded for long. */
+export const VIEW_SIDE = 600;
+
+/**
+ * Any image as a JPEG that fits `side` on its longest side, with its size.
+ * The full image is decoded only for the time it takes to draw it smaller.
+ */
+export async function reduceImage(blob: Blob, side: number, quality = THUMBNAIL_QUALITY): Promise<{blob: Blob; width: number; height: number}> {
+  const bitmap = await createImageBitmap(blob);
   try {
-    return URL.createObjectURL(await drawJpeg(bitmap, size.width, size.height, THUMBNAIL_QUALITY));
+    const size = fitInside(bitmap.width, bitmap.height, side);
+    return {...size, blob: await drawJpeg(bitmap, size.width, size.height, quality)};
   } finally {
     bitmap.close();
   }

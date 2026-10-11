@@ -40,6 +40,15 @@ export function loadChatCache(account: string): ChatCache | null {
   }
 }
 
+/** A message without its thumbnail: the cache stays small, and the next refresh brings thumbnails back. */
+function withoutThumbnail<T extends ChatMessage | null>(message: T): T {
+  if (message == null || message.content.thumbnail == null) {
+    return message;
+  }
+  const {thumbnail: _thumbnail, ...content} = message.content;
+  return {...message, content};
+}
+
 export function saveChatCache(account: string, chats: Chat[], threads: Record<string, ChatMessage[]>): void {
   const kept: Record<string, ChatMessage[]> = {};
   for (const chat of chats) {
@@ -50,10 +59,16 @@ export function saveChatCache(account: string, chats: Chat[], threads: Record<st
     if (messages?.length) {
       kept[chat.jid] = messages
         .filter(message => !message.pending)
-        .slice(-MAX_MESSAGES);
+        .slice(-MAX_MESSAGES)
+        .map(withoutThumbnail);
     }
   }
-  const stored: Stored = {account, savedAt: Date.now(), chats, threads: kept};
+  const stored: Stored = {
+    account,
+    savedAt: Date.now(),
+    chats: chats.map(chat => (chat.lastMessage ? {...chat, lastMessage: withoutThumbnail(chat.lastMessage)} : chat)),
+    threads: kept,
+  };
   try {
     localStorage.setItem(CACHE_KEY, JSON.stringify(stored));
   } catch {
