@@ -54,10 +54,14 @@ export function openChatPath(jid: string): string {
   return chatPath(jid);
 }
 
-/** The page transition's key: the path, and for a conversation, which opening it is. */
+/**
+ * The page transition's key: the path, and for a conversation, which opening
+ * it is. A photo opened in full is drawn over its conversation, on the same
+ * page.
+ */
 export function transitionKey({pathname}: {pathname: string}): string {
-  const jid = /^\/chat\/[^/]+$/.test(pathname) ? chatOfPath(pathname) : null;
-  return jid == null ? pathname : `${pathname}#${openings.get(jid) ?? 0}`;
+  const jid = /^\/chat\/[^/]+(\/photo\/[^/]+)?$/.test(pathname) ? chatOfPath(pathname) : null;
+  return jid == null ? pathname : `${chatPath(jid)}#${openings.get(jid) ?? 0}`;
 }
 
 /** The chat whose conversation (or one of its pages) is at `pathname`. */

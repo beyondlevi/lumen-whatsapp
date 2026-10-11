@@ -5,7 +5,6 @@ import {
 } from '@wearables-ui-toolkit/mrbd/react-router';
 import {BrowserRouter, Navigate, Route, Routes, useLocation} from 'react-router-dom';
 import {ChatList, ChatListRoute, transitionKey} from './pages/ChatListPage';
-import {PhotoPage} from './pages/PhotoPage';
 import {RecordPage} from './pages/RecordPage';
 import {SearchPage, SEARCH_PATH} from './pages/SearchPage';
 import {ThreadPage} from './pages/ThreadPage';
@@ -43,7 +42,7 @@ function Screens() {
             <Route path="/" element={<ChatListRoute />} />
             <Route path={SEARCH_PATH} element={<SearchPage />} />
             <Route path="/chat/:jid" element={<ThreadPage />} />
-            <Route path="/chat/:jid/photo/:messageId" element={<PhotoPage />} />
+            <Route path="/chat/:jid/photo/:messageId" element={<ThreadPage />} />
             <Route path="/chat/:jid/record" element={<RecordPage />} />
             <Route path="/chat/:jid/transcript/:messageId" element={<TranscriptPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
