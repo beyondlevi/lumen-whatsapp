@@ -9,7 +9,8 @@
 //   instance: "Lumen Test" (has a space, to exercise URL-encoding)
 //   apikey:   "mock-api-key" (fake, local only)
 // Test controls (not part of Evolution):
-//   POST /__mock/reset              {downForMs?}  reseed; refuse connections for downForMs
+//   POST /__mock/reset              {downForMs?, extraChats?}  reseed; refuse connections for downForMs;
+//                                   extraChats adds that many older chats (30+ messages each) for load tests
 //   POST /__mock/incoming           {remoteJid, text, pushName?}  deliver a new message
 //   GET  /__mock/sent               messages sent through sendText
 //   GET  /__mock/reactions          reactions sent through sendReaction
@@ -119,10 +120,41 @@ function seed() {
   return {messages, contacts, chatNames, pictures, sent: [], reactions: [], voice: [], mediaRequests: [], pictureRequests: []};
 }
 
-function reset(downForMs = 0, failMedia = false) {
+const FILLER = [
+  'Ok',
+  'See you at the station at eight, the train leaves at 8:20.',
+  'Did you get the files I sent yesterday? The second one has the new numbers and the photos from the visit.',
+  'Thanks!',
+  'Can we move the call to Thursday afternoon?',
+];
+
+/** Older chats after the seeded ones, for load tests: every 2nd with a picture, every 3rd unread. */
+function addExtraChats(seeded, count) {
+  for (let index = 0; index < count; index += 1) {
+    const jid = `55119800${String(index).padStart(5, '0')}@s.whatsapp.net`;
+    const name = `Contact ${index + 1}`;
+    const newest = 300000 + index * 3600;
+    const unread = index % 3 === 0;
+    for (let step = 34; step >= 0; step -= 1) {
+      const fromMe = step % 4 === 1;
+      seeded.messages.push(record({remoteJid: jid, fromMe, pushName: fromMe ? null : name, secondsAgo: newest + step * 120,
+        status: fromMe || !unread || step > 1 ? 'READ' : undefined, ...text(FILLER[(index + step) % FILLER.length])}));
+    }
+    seeded.contacts.push({remoteJid: jid, pushName: name, type: 'contact'});
+    seeded.chatNames[jid] = name;
+    if (index % 2 === 0) {
+      const file = ['avatar-maya.webp', 'avatar-sam.webp', 'avatar-hike.webp', 'avatar-bikes.webp'][index % 4];
+      // A query per chat, so each picture is a separate download and decode, as on a real account.
+      seeded.pictures[jid] = {file: `${file}?chat=${index}`, inList: true};
+    }
+  }
+  return seeded;
+}
+
+function reset(downForMs = 0, failMedia = false, extraChats = 0) {
   idCounter = 0;
   mediaFails = failMedia;
-  state = seed();
+  state = addExtraChats(seed(), extraChats);
   downUntil = Date.now() + downForMs;
 }
 
@@ -246,7 +278,7 @@ async function handle(req, res) {
   if (url.pathname.startsWith('/__mock/')) {
     if (url.pathname === '/__mock/reset' && req.method === 'POST') {
       const body = await readJson(req);
-      reset(Number(body.downForMs) || 0, body.mediaFails === true);
+      reset(Number(body.downForMs) || 0, body.mediaFails === true, Number(body.extraChats) || 0);
       return send(res, 200, {ok: true}, origin);
     }
     if (url.pathname === '/__mock/incoming' && req.method === 'POST') {
