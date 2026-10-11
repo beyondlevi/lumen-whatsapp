@@ -7,6 +7,7 @@
 //   POST /message/sendText/{instance}        {number, text, quoted?: {key, message}}
 //   POST /message/sendReaction/{instance}    {key: {id, remoteJid, fromMe, participant?}, reaction}
 //   POST /message/sendWhatsAppAudio/{instance} {number, audio: base64, encoding: true} (voice note, ptt)
+//   POST /message/sendMedia/{instance}       {number, mediatype: 'image', mimetype, caption?, media: base64, fileName}
 //   POST /chat/fetchProfilePictureUrl/{instance}     {number} -> {wuid, profilePictureUrl | null}
 //   POST /chat/getBase64FromMediaMessage/{instance}  {message: {key}, convertToMp4?} -> {mimetype, base64, …}
 // Every call sends the `apikey` header. The instance name is a path segment and
@@ -53,6 +54,7 @@ export type EvolutionApi = Pick<
   | 'sendText'
   | 'sendReaction'
   | 'sendVoice'
+  | 'sendPhoto'
   | 'markMessagesAsRead'
   | 'fetchProfilePictureUrl'
   | 'getMediaMessage'
@@ -208,6 +210,18 @@ export class EvolutionClient {
    */
   sendVoice(remoteJid: string, audio: string, _seconds?: number, signal?: AbortSignal): Promise<unknown> {
     return this.post('message/sendWhatsAppAudio', {number: remoteJid, audio, encoding: true}, signal, MEDIA_TIMEOUT_MS);
+  }
+
+  /**
+   * Sends a photo (SendMediaDto of v2.3: `media` is a URL or plain base64,
+   * without a data: prefix; an empty caption is left out).
+   */
+  sendPhoto(remoteJid: string, photo: string, mimetype: string, caption: string, signal?: AbortSignal): Promise<unknown> {
+    const body: Record<string, unknown> = {number: remoteJid, mediatype: 'image', mimetype, media: photo, fileName: 'photo.jpg'};
+    if (caption) {
+      body.caption = caption;
+    }
+    return this.post('message/sendMedia', body, signal, MEDIA_TIMEOUT_MS);
   }
 
   /** Reacts to a message with an emoji (an empty string removes the reaction). */

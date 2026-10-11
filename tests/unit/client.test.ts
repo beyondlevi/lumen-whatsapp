@@ -39,6 +39,25 @@ describe('EvolutionClient requests', () => {
     expect(JSON.parse(String(init.body))).toEqual({number: '5511999990001@s.whatsapp.net', audio: 'T2dnUw==', encoding: true});
   });
 
+  it('sends photos to sendMedia (v2.3 SendMediaDto) as plain base64, with the caption when there is one', async () => {
+    const {client, fetchMock} = clientReturning(jsonResponse(201, {key: {id: 'P1', fromMe: true, remoteJid: 'x@s.whatsapp.net'}}));
+    await client.sendPhoto('5511999990001@s.whatsapp.net', '/9j/4AAQ', 'image/jpeg', 'Pôr do sol');
+    const withoutCaption = clientReturning(jsonResponse(201, {key: {id: 'P2', fromMe: true, remoteJid: 'x@s.whatsapp.net'}}));
+    await withoutCaption.client.sendPhoto('5511999990001@s.whatsapp.net', '/9j/4AAQ', 'image/jpeg', '');
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe('https://evo.example.test/message/sendMedia/My%20Phone%2B1');
+    expect((init.headers as Record<string, string>).apikey).toBe('test-key');
+    expect(JSON.parse(String(init.body))).toEqual({
+      number: '5511999990001@s.whatsapp.net',
+      mediatype: 'image',
+      mimetype: 'image/jpeg',
+      media: '/9j/4AAQ',
+      fileName: 'photo.jpg',
+      caption: 'Pôr do sol',
+    });
+    expect(JSON.parse(String(withoutCaption.fetchMock.mock.calls[0][1].body))).not.toHaveProperty('caption');
+  });
+
   it('URL-encodes the instance and sends the apikey header', async () => {
     const {client, fetchMock} = clientReturning(jsonResponse(200, []));
     await client.findChats(40);

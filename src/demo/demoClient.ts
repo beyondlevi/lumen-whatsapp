@@ -148,6 +148,22 @@ export function createDemoClient(): EvolutionApi {
       return {...record(chat, sent), status: 'PENDING'};
     },
 
+    async sendPhoto(remoteJid: string, photo: string, mimetype: string, caption: string) {
+      await wait(SEND_DELAY_MS * 2);
+      const chat = chatFor(remoteJid);
+      if (!chat) {
+        return null;
+      }
+      // Kept as a data URI, so View shows the photo you took.
+      const sent = add(chat, {
+        fromMe: true,
+        messageType: 'imageMessage',
+        message: {imageMessage: {mimetype, ...(caption ? {caption} : {})}},
+        media: {url: `data:${mimetype};base64,${photo}`, mimetype},
+      });
+      return {...record(chat, sent), status: 'PENDING'};
+    },
+
     async sendReaction(key: MessageKeyRef, reaction: string) {
       await wait(SEND_DELAY_MS / 2);
       const chat = chatFor(key.remoteJid);

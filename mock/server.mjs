@@ -9,13 +9,17 @@
 //   instance: "Lumen Test" (has a space, to exercise URL-encoding)
 //   apikey:   "mock-api-key" (fake, local only)
 // Test controls (not part of Evolution):
-//   POST /__mock/reset              {downForMs?, extraChats?}  reseed; refuse connections for downForMs;
+//   POST /__mock/reset              {downForMs?, extraChats?, failPhotos?}  reseed; refuse connections for downForMs;
 //                                   extraChats adds that many older chats (30+ messages each) for load tests
+//                                   failPhotos: that many sendMedia calls fail with a 500
 //   POST /__mock/incoming           {remoteJid, text, pushName?}  deliver a new message
 //   GET  /__mock/sent               messages sent through sendText
 //   GET  /__mock/reactions          reactions sent through sendReaction
 //   GET  /__mock/media-requests     keys asked from getBase64FromMediaMessage
 //   GET  /__mock/voice              voice notes sent through sendWhatsAppAudio ({number, bytes, head, encoding})
+//   POST /__mock/fail-photos        {count, delayMs?}  the next count sendMedia calls fail with a 500;
+//                                   every sendMedia answers after delayMs (an upload over the phone's internet)
+//   GET  /__mock/photos             photos sent through sendMedia ({number, mediatype, mimetype, caption, fileName, bytes, head, width, height})
 //   GET  /__mock/files/<name>       profile pictures (files from src/demo/assets)
 // fetchProfilePictureUrl and getBase64FromMediaMessage serve the fictional
 // demo assets; reset with {mediaFails: true} makes media downloads fail (400).
@@ -33,6 +37,9 @@ const INSTANCE_ID = 'a1b2c3d4-0000-4000-8000-000000000001';
 let state;
 let downUntil = 0;
 let mediaFails = false;
+/** sendMedia calls left to refuse with a 500 (reset {failPhotos}). */
+let photoFailures = 0;
+let photoDelayMs = 0;
 let idCounter = 0;
 
 function nextId(prefix) {
@@ -117,7 +124,7 @@ function seed() {
     [family]: {file: 'avatar-hike.webp', inList: false},
     [carla]: {file: 'missing.webp', inList: false},
   };
-  return {messages, contacts, chatNames, pictures, sent: [], reactions: [], voice: [], mediaRequests: [], pictureRequests: []};
+  return {messages, contacts, chatNames, pictures, sent: [], reactions: [], voice: [], photos: [], mediaRequests: [], pictureRequests: []};
 }
 
 const FILLER = [
@@ -151,9 +158,26 @@ function addExtraChats(seeded, count) {
   return seeded;
 }
 
-function reset(downForMs = 0, failMedia = false, extraChats = 0) {
+/** Width and height of a JPEG, from its SOF segment (null when it is not one). */
+function jpegSize(bytes) {
+  if (bytes[0] !== 0xff || bytes[1] !== 0xd8) return null;
+  for (let offset = 2; offset + 9 < bytes.length; ) {
+    if (bytes[offset] !== 0xff) return null;
+    const marker = bytes[offset + 1];
+    const length = bytes.readUInt16BE(offset + 2);
+    if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
+      return {height: bytes.readUInt16BE(offset + 5), width: bytes.readUInt16BE(offset + 7)};
+    }
+    offset += 2 + length;
+  }
+  return null;
+}
+
+function reset(downForMs = 0, failMedia = false, extraChats = 0, failPhotos = 0) {
   idCounter = 0;
   mediaFails = failMedia;
+  photoFailures = failPhotos;
+  photoDelayMs = 0;
   state = addExtraChats(seed(), extraChats);
   downUntil = Date.now() + downForMs;
 }
@@ -278,7 +302,7 @@ async function handle(req, res) {
   if (url.pathname.startsWith('/__mock/')) {
     if (url.pathname === '/__mock/reset' && req.method === 'POST') {
       const body = await readJson(req);
-      reset(Number(body.downForMs) || 0, body.mediaFails === true, Number(body.extraChats) || 0);
+      reset(Number(body.downForMs) || 0, body.mediaFails === true, Number(body.extraChats) || 0, Number(body.failPhotos) || 0);
       return send(res, 200, {ok: true}, origin);
     }
     if (url.pathname === '/__mock/incoming' && req.method === 'POST') {
@@ -293,6 +317,15 @@ async function handle(req, res) {
     }
     if (url.pathname === '/__mock/sent' && req.method === 'GET') {
       return send(res, 200, state.sent, origin);
+    }
+    if (url.pathname === '/__mock/fail-photos' && req.method === 'POST') {
+      const body = await readJson(req);
+      photoFailures = Number(body.count) || 0;
+      photoDelayMs = Number(body.delayMs) || 0;
+      return send(res, 200, {ok: true}, origin);
+    }
+    if (url.pathname === '/__mock/photos' && req.method === 'GET') {
+      return send(res, 200, state.photos, origin);
     }
     if (url.pathname === '/__mock/voice' && req.method === 'GET') {
       return send(res, 200, state.voice, origin);
@@ -403,6 +436,31 @@ async function handle(req, res) {
       const remoteJid = String(body.number).includes('@') ? String(body.number) : `${body.number}@s.whatsapp.net`;
       const message = record({remoteJid, fromMe: true, secondsAgo: 0, messageType: 'audioMessage',
         message: {audioMessage: {mimetype: 'audio/ogg; codecs=opus', ptt: true}}});
+      state.messages.push(message);
+      const {id, MessageUpdate, _unread, ...response} = message;
+      return send(res, 201, {...response, status: 'PENDING'}, origin);
+    }
+    case 'POST message/sendMedia': {
+      // Like Evolution v2.3 (SendMediaDto): mediatype required, `media` a URL or plain base64.
+      const media = typeof body.media === 'string' ? body.media : '';
+      if (!['image', 'video', 'document', 'audio'].includes(body.mediatype)) {
+        return send(res, 400, errorBody(400, 'Bad Request', ['mediatype must be one of image, document, video, audio']), origin);
+      }
+      if (!/^[A-Za-z0-9+/]+={0,2}$/.test(media) || media.length % 4 !== 0) {
+        return send(res, 400, errorBody(400, 'Bad Request', ['Owned media must be a url or base64']), origin);
+      }
+      if (photoDelayMs > 0) await new Promise(resolve => setTimeout(resolve, photoDelayMs));
+      if (photoFailures > 0) {
+        photoFailures -= 1;
+        return send(res, 500, errorBody(500, 'Internal Server Error', ['Error: upload failed']), origin);
+      }
+      const bytes = Buffer.from(media, 'base64');
+      const size = jpegSize(bytes);
+      state.photos.push({number: body.number, mediatype: body.mediatype, mimetype: body.mimetype ?? null, caption: body.caption ?? null,
+        fileName: body.fileName ?? null, bytes: bytes.length, head: bytes.subarray(0, 3).toString('hex'), width: size?.width ?? null, height: size?.height ?? null});
+      const remoteJid = String(body.number).includes('@') ? String(body.number) : `${body.number}@s.whatsapp.net`;
+      const message = record({remoteJid, fromMe: true, secondsAgo: 0, messageType: 'imageMessage',
+        message: {imageMessage: {mimetype: body.mimetype ?? 'image/jpeg', ...(body.caption ? {caption: body.caption} : {})}}});
       state.messages.push(message);
       const {id, MessageUpdate, _unread, ...response} = message;
       return send(res, 201, {...response, status: 'PENDING'}, origin);
