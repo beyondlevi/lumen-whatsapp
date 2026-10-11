@@ -24,7 +24,8 @@ import {loadReadMarks, saveReadMarks, type ReadMarks} from './readMarks';
 import {createDemoAudio} from '../audio/demoAudio';
 import {hostAudio, type LumenAudio, type LumenAudioResult} from '../audio/lumenAudio';
 import {createAvatarLoader} from './avatars';
-import {createMediaLoader, type LoadedMedia} from './media';
+import {createMediaLoader, type LoadedMedia, type LoadedPhoto} from './media';
+import {createThumbnailLoader, messageThumbnail} from './photoThumbnails';
 import {photoThumbnail, photoToSend, type CapturedPhoto} from '../photo/capturedPhoto';
 import {failureReason} from '../failure';
 import {useLumenConfig} from './useLumenConfig';
@@ -77,6 +78,12 @@ export type WhatsAppState = {
   requestAvatar(jid: string, knownUrl?: string): void;
   /** Downloads a photo or voice message on demand (kept in memory for the session). */
   loadMedia(message: ChatMessage): Promise<LoadedMedia>;
+  /** A photo in full, decoded at most 600 px; the caller releases it. */
+  loadPhoto(message: ChatMessage): Promise<LoadedPhoto>;
+  /** The thumbnail of a photo or video: the one in the message, or one made here; null while there is none. */
+  photoThumbnail(message: ChatMessage): string | null;
+  /** Makes the thumbnail of a photo that came without one (a bubble on screen asks). */
+  requestPhotoThumbnail(message: ChatMessage): void;
   /** Microphone and transcription: the host's, the simulated one in demo mode, or null (not available). */
   audio: LumenAudio | null;
   /** Sends a recorded voice note (`levels` is accepted for the shared recorder; WhatsApp draws its own waveform). */
@@ -188,6 +195,12 @@ export function useWhatsAppState(): WhatsAppState {
   useEffect(() => () => avatars?.dispose(), [avatars]);
   const media = useMemo(() => (client == null ? null : createMediaLoader(client)), [client]);
   useEffect(() => () => media?.dispose(), [media]);
+  const [thumbnailVersion, setThumbnailVersion] = useState(0);
+  const thumbnails = useMemo(
+    () => (media == null ? null : createThumbnailLoader(media.photoBlob, () => setThumbnailVersion(version => version + 1))),
+    [media],
+  );
+  useEffect(() => () => thumbnails?.dispose(), [thumbnails]);
 
   const setOfflineState = useCallback((value: boolean) => {
     if (offlineRef.current === value) {
@@ -723,6 +736,12 @@ export function useWhatsAppState(): WhatsAppState {
     [],
   );
 
+  const loadPhoto = useCallback(
+    (message: ChatMessage) =>
+      media == null ? Promise.reject(new EvolutionError('network', null, 'Not connected')) : media.loadPhoto(message),
+    [media],
+  );
+
   const loadMedia = useCallback(
     (message: ChatMessage) =>
       media == null ? Promise.reject(new EvolutionError('network', null, 'Not connected')) : media.load(message),
@@ -816,6 +835,9 @@ export function useWhatsAppState(): WhatsAppState {
       avatarFor: jid => avatars?.get(jid) ?? null,
       requestAvatar: (jid, knownUrl) => avatars?.request(jid, knownUrl),
       loadMedia,
+      loadPhoto,
+      photoThumbnail: message => messageThumbnail(message) ?? thumbnails?.get(message.id) ?? null,
+      requestPhotoThumbnail: message => thumbnails?.request(message),
       audio,
       sendVoice,
       sendPhoto,
@@ -828,7 +850,7 @@ export function useWhatsAppState(): WhatsAppState {
       searchTargets,
       contactName: jid => contactNames.get(jid) ?? contactsRef.current.get(jid) ?? null,
     }),
-    // avatarVersion: a picture finished loading.
-    [audio, avatarVersion, avatars, chats, config, contactNames, demo, discardPhoto, isUnread, loadMedia, offline, openThread, phase, reloadConfig, retryPhoto, saveTranscript, searchTargets, sendPhoto, sendReaction, sendText, sendVoice, sentPhotos, syncing, threads, transcripts],
+    // avatarVersion: a picture finished loading; thumbnailVersion: a thumbnail was made.
+    [audio, avatarVersion, thumbnailVersion, thumbnails, loadPhoto, avatars, chats, config, contactNames, demo, discardPhoto, isUnread, loadMedia, offline, openThread, phase, reloadConfig, retryPhoto, saveTranscript, searchTargets, sendPhoto, sendReaction, sendText, sendVoice, sentPhotos, syncing, threads, transcripts],
   );
 }

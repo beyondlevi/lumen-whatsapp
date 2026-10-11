@@ -63,7 +63,7 @@ export type ThreadProps = {
 // gives it a new location object; with primitives for props, the conversation
 // is not drawn again on its way out (Back to the list).
 export const Thread = memo(function Thread({jid, pathname, locationKey, composerOpen, navigate, onTakePhoto, photoButtonRef}: ThreadProps) {
-  const {chatFor, thread, openThread, sendText, sendReaction, offline, avatarFor, requestAvatar, loadMedia, audio: lumenAudio, transcriptFor, contactName, sentPhoto, retryPhoto, discardPhoto} =
+  const {chatFor, thread, openThread, sendText, sendReaction, offline, avatarFor, requestAvatar, loadMedia, audio: lumenAudio, transcriptFor, contactName, sentPhoto, retryPhoto, discardPhoto, photoThumbnail, requestPhotoThumbnail} =
     useWhatsApp();
   const chat = chatFor(jid);
   // A contact found by voice search may have no conversation in the list yet.
@@ -114,13 +114,8 @@ export const Thread = memo(function Thread({jid, pathname, locationKey, composer
   );
   const startReply = useCallback(() => openComposer(null), [openComposer]);
   const keepWindow = messageWindow.keep;
-  const viewPhoto = useCallback(
-    (message: ChatMessage) => {
-      keepWindow();
-      navigate(photoPath(jid, message.id));
-    },
-    [jid, keepWindow, navigate],
-  );
+  // A photo opens over the conversation, which stays as it is (see PhotoView).
+  const viewPhoto = useCallback((message: ChatMessage) => navigate(photoPath(jid, message.id)), [jid, navigate]);
   const transcribe = useCallback(
     (message: ChatMessage) => {
       keepWindow();
@@ -282,6 +277,8 @@ export const Thread = memo(function Thread({jid, pathname, locationKey, composer
                 transcript={message.content.kind === 'audio' ? transcriptFor(message.id) : null}
                 onToggleAudio={toggleAudio}
                 sentPhoto={photo}
+                thumbnail={message.content.kind === 'photo' || message.content.kind === 'video' ? photoThumbnail(message) : null}
+                onNeedThumbnail={requestPhotoThumbnail}
                 onRetryPhoto={retryPhotoMessage}
                 onDiscardPhoto={discardPhotoMessage}
               />

@@ -40,6 +40,7 @@ import {t} from '../i18n/strings';
 import {reactionCount, type ReactionSummary} from '../reactions';
 import type {AudioState} from '../state/useAudioPlayer';
 import type {SentPhoto} from '../state/useWhatsAppState';
+import {PhotoContent} from './PhotoContent';
 import {PHOTO_STATE_KEYS, SentPhotoContent} from './SentPhotoContent';
 
 export const REACTIONS = ['👍', '❤️', '😂', '😭'] as const;
@@ -65,6 +66,9 @@ type MessageBubbleProps = {
   transcript?: string | null;
   /** A photo sent this session: its thumbnail and upload. */
   sentPhoto?: SentPhoto | null;
+  /** A photo's or video's thumbnail, when there is one yet. */
+  thumbnail: string | null;
+  onNeedThumbnail: (message: ChatMessage) => void;
   onRetryPhoto: (message: ChatMessage) => void;
   onDiscardPhoto: (message: ChatMessage) => void;
 };
@@ -174,6 +178,8 @@ export function MessageBubble({
   sentPhoto,
   onRetryPhoto,
   onDiscardPhoto,
+  thumbnail,
+  onNeedThumbnail,
 }: MessageBubbleProps) {
   const isOutgoing = message.fromMe;
   const isAudio = message.content.kind === 'audio';
@@ -345,6 +351,8 @@ export function MessageBubble({
             <div className="message-bubble-content">
               {sentPhoto ? (
                 <SentPhotoContent photo={sentPhoto} caption={message.content.text} alt={text} />
+              ) : isPhoto || (message.content.kind === 'video' && thumbnail != null) ? (
+                <PhotoContent message={message} thumbnail={thumbnail} alt={text} onNeedThumbnail={onNeedThumbnail} />
               ) : isAudio ? (
                 <AudioContent message={message} audio={audio} transcript={transcript} />
               ) : (
