@@ -31,6 +31,16 @@ toolkit's messaging example (`examples/messaging`).
   (`convertToMp4`). One message plays at a time and playback stops when the conversation closes.
   Enter on a voice message opens its menu: **Listen** (it reads **Pause** while playing), **Transcribe**,
   the four reactions and Reply.
+- **Sending photos**: **Photo** (the camera icon) opens the camera: on Lumen, a file input
+  (`accept="image/*"`) opens Lumen's capture screen, whose index tap takes the photo and whose middle tap
+  cancels; the page gets a JPEG of 1200 x 1600 (in a desktop browser, a file picker). The photo then shows
+  on a send screen, over the conversation: its preview, an optional caption (a real text field, so Lumen's
+  keyboard offers dictation, writing with the band and the phone) and **Send**, **Retake** and **Cancel**;
+  Back leaves without sending. Send goes back to the conversation at once, where the photo's bubble shows
+  its thumbnail and its upload: “Sending…”, then “Sent” (with a toast), or “Not sent” (with a toast), whose
+  menu offers **Try again** and **Discard**. A photo larger than 1600 px on its longest side, heavier than
+  1 MB or not a JPEG is reduced before it goes (it goes over the phone's internet); Lumen's capture goes as
+  it is. View on a photo you sent shows it without a download.
 - **Sending voice notes**: **Voice** opens the recording screen, which records through the Lumen host's
   microphone API (see "Lumen audio API" below). Send posts the note to `sendWhatsAppAudio`; it arrives
   as a WhatsApp voice note (ptt).
@@ -46,7 +56,7 @@ toolkit's messaging example (`examples/messaging`).
   24 h; “no picture” 6 h). A picture is shown only after it loads; otherwise the initials (or a
   person/group icon) stay.
 - **Conversation actions**: a bottom rail with Reply, Voice (records a voice note when the host has
-  `window.lumen.audio`, disabled otherwise) and Photos (disabled).
+  `window.lumen.audio`, disabled otherwise) and Photo (opens the camera).
 - **Reply**: the text field (the toolkit's `InputTextView`, a real `<textarea>`) appears only after Reply,
   as its own history entry, so Back closes it and focus returns to Reply. On the glasses, Enter on the
   field opens the platform's dictation composer, and the text arrives through `input`/`change` events.
@@ -88,6 +98,11 @@ The app uses only arrow keys, Enter, and Escape (the Neural Band / Rokid gesture
 | Conversation | Enter on a voice message | Opens its menu: Listen/Pause, Transcribe, reactions, Reply |
 | Conversation | Enter on Voice | Opens the recording screen |
 | Recording | Enter on Send (initial focus) | Stops, sends, returns to the conversation on Voice |
+| Conversation | Enter on Photo | Opens the camera (Lumen's capture screen) |
+| Send photo | Enter on Send (initial focus) | Sends, returns to the conversation on Photo; the bubble follows the upload |
+| Send photo | Up, Enter | The caption field (dictation, writing, phone) |
+| Send photo | Enter on Retake / Cancel, or Escape | Another photo (the caption stays) / back without sending |
+| Conversation | Enter on a photo that was not sent | Menu: Try again, View, Discard |
 | Recording | Right, Enter (Discard) or Escape | Cancels without sending |
 | Transcript | Escape | Back to the voice message (the transcript stays under it) |
 | Message menu | Left / Right, Enter | Pick View (photos), 👍 ❤️ 😂 😭 (sends the reaction) or Reply (quoted reply) |
@@ -180,6 +195,7 @@ The instance name is a path segment encoded with `encodeURIComponent`, so a spac
 | `POST /chat/markMessageAsRead/{instance}` | `{"readMessages": [{"id", "fromMe": false, "remoteJid"}]}` (up to 30) | 201; failures are ignored |
 | `POST /chat/fetchProfilePictureUrl/{instance}` | `{"number": "<jid>"}` (contacts and groups) | 200, `{wuid, profilePictureUrl}`; `null` when there is none or it is private |
 | `POST /message/sendWhatsAppAudio/{instance}` | `{"number": "<jid>", "audio": "<base64>", "encoding": true}`. `audio` is plain base64 or a URL (class-validator `isBase64`, no `data:` prefix); multipart with a `file` field also works | 201, the sent message. With `encoding: true` (also the default) the server re-encodes with ffmpeg to OGG/Opus mono 48 kHz (`libopus`, `-application voip`) and sends it as a voice note (`ptt: true`, `audio/ogg; codecs=opus`). The host's recording is already OGG/Opus mono 16 kHz; `encoding: false` would skip the conversion, but keeping it is safer for WhatsApp. Source: [`audioWhatsapp`](https://github.com/EvolutionAPI/evolution-api/blob/fa09d37892cdbb1d65a250155d293d92230c5b30/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts#L3206), [route](https://github.com/EvolutionAPI/evolution-api/blob/fa09d37892cdbb1d65a250155d293d92230c5b30/src/api/routes/sendMessage.router.ts#L88) |
+| `POST /message/sendMedia/{instance}` | `{"number": "<jid>", "mediatype": "image", "mimetype": "image/jpeg", "media": "<base64>", "fileName": "photo.jpg", "caption": "…"}` (`caption` left out when empty). `media` is plain base64 or a URL, without a `data:` prefix. Checked against [`SendMediaDto`](https://github.com/EvolutionAPI/evolution-api/blob/main/src/api/dto/sendMessage.dto.ts) and `mediaMessageSchema` (`number` and `mediatype` required) | 201, the sent message (`imageMessage`); the app waits up to 30 s |
 | `POST /chat/getBase64FromMediaMessage/{instance}` | `{"message": {"key": {"id", "fromMe", "remoteJid"}}, "convertToMp4": false}` | 201, `{mediaType, fileName, mimetype, base64, …}`; 400 when the download fails. The server looks the message up by key and retries a failed download once after 5 s, so the app waits up to 30 s |
 
 `status@broadcast`, `@broadcast` and `@newsletter` chats are hidden.
@@ -361,6 +377,13 @@ calls to the mock. It covers:
 - a quoted reply;
 - polling, both in the conversation and in the list;
 - Back restoring focus;
+- photos (`setInputFiles` through the file chooser, with `tests/fixtures/camera.jpg`, a JPEG of 1200 x
+  1600 as Lumen's capture hands over): the send screen (preview, focus on Send, the conversation under it
+  inert), a dictated caption, Send back to the conversation at once with the bubble “Sending…” (the mock
+  answers after 2 s) and then “Sent”, the photo checked on the mock (`/__mock/photos`: to Ana, `image`,
+  `image/jpeg`, the caption, the same bytes, 1200 x 1600), a refused upload (`/__mock/fail-photos`): “Not
+  sent” and Try again from its menu, Cancel and Back sending nothing, and Retake keeping the caption, with a
+  2400 x 3200 photo reduced to 1200 x 1600;
 - Back to a long list (65 chats): the list stays mounted, hidden under the routes (`inert`, `aria-hidden`) and
   out of the D-pad's reach while the chat is open, and comes back with the same row elements and the focus on
   the chat; the list renders its first rows only and more as the focus goes down; the conversation renders
@@ -426,6 +449,10 @@ thread's long tasks after it; and the launch until the list is drawn. Measured o
 
 With the CPU throttled 4x: Back 3275 → 57 ms, opening 2237 → 1029 ms. With 40 extra chats (6x): Back
 2069 → 75 ms.
+
+Sending photos (measured on 2026-10-11, same settings): Back from the send screen to the conversation takes
+88 ms (median of 5, 73-90), with the focus back on Photo, and Back to the list stays at 73 ms (74 ms
+before).
 
 A smoke test for a real Chromium 95 (Android System WebView version), which also runs the long-message
 scenario, is in `tests/e2e/chromium95.mjs`; its
