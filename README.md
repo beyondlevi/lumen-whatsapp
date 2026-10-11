@@ -20,11 +20,22 @@ toolkit's messaging example (`examples/messaging`).
   cached in localStorage (never the API key). On launch the cached list shows at once, and the header
   shows a spinner with “Loading…” until the first refresh arrives.
 - **Conversation**: the 30 most recent messages, starting below the header (nothing runs under the name
-  chip), with the chat's picture in the header. Videos, stickers, documents, locations, contacts and polls
-  show a marker (“Video”, “Document: …”).
+  chip), with the chat's picture in the header. Stickers, documents, locations, contacts and polls
+  show a marker (“Document: …”); a video shows its thumbnail with a play icon when the message has one
+  (it does not play), a marker otherwise.
+- **Photo thumbnails**: every photo bubble, received or sent, from history or new, sent by this app or
+  from the phone, shows its thumbnail in a box with the photo's proportions (from the message's
+  `width`/`height`, 4:3 when missing, so the bubble never changes size when the image arrives), with the
+  caption below. Where it comes from (see "Thumbnails" under Evolution API v2): the message's
+  `jpegThumbnail`, which `findMessages` returns; for a photo sent from this app in this session, the
+  thumbnail made on the device; for a message without `jpegThumbnail`, the photo is downloaded once
+  (`getBase64FromMediaMessage`), only for bubbles that are rendered and one at a time, and reduced to 320 px.
+  The last 24 of those are kept; thumbnails are never written to the localStorage cache.
 - **Photos**: Enter on a photo opens its menu with **View** first. View downloads the photo
-  (`getBase64FromMediaMessage`) and shows it full screen on the dark window background, with a loader
-  while it downloads and an error with **Try again** if it fails. Back returns to the same bubble.
+  (`getBase64FromMediaMessage`) and shows it full screen on the dark window background, decoded at
+  600 px at most, with a loader while it downloads and an error with **Try again** if it fails. It opens
+  over the conversation, which stays as it was, and Back (the middle tap) returns to the same bubble; the
+  image is released when the photo closes.
 - **Voice messages**: the bubble shows the length; Enter plays or pauses it, with the position and a
   progress bar. The audio is downloaded on the first play. WhatsApp voice notes are OGG/Opus, which
   `<audio>` plays in GeckoView and in Chromium; if `canPlayType` says no, the app asks the server for MP4
@@ -200,6 +211,32 @@ The instance name is a path segment encoded with `encodeURIComponent`, so a spac
 
 `status@broadcast`, `@broadcast` and `@newsletter` chats are hidden.
 
+### Thumbnails
+
+Checked against the Evolution source (v2.3.7, Baileys 7.0.0-rc.9, Prisma 6.16.2). WhatsApp messages
+carry a small JPEG in `imageMessage.jpegThumbnail` (and, when the sender adds one, in
+`videoMessage.jpegThumbnail`). Evolution keeps it: `messages.upsert` → `prepareMessage` →
+`deserializeMessageBuffers` leaves it as bytes, and the same object is stored and sent to webhooks.
+`findMessages` is a plain Prisma `findMany` over the stored message, and Prisma returns stored bytes as a
+**base64 string**. Responses built from the live object (the `sendMedia` answer, webhooks) carry it as
+`JSON.stringify` of a `Uint8Array`, an object with numeric keys (`{"0":255,"1":216,…}`); 2.3.3–2.3.5 also
+stored that form. `bytesToBase64` (`src/evolution/parse.ts`) reads a base64 string, an array, a Node
+`{type: "Buffer", data}` or a numeric-key object. `imageMessage.width`/`height` give the box's proportions.
+
+| Photo | Thumbnail shown |
+|---|---|
+| Received (from history or new; the 3 s poll brings it) | its `jpegThumbnail`, made by the sender's phone (about 72 px wide on WhatsApp's phone apps) |
+| Sent from the phone | its `jpegThumbnail`, made by the phone |
+| Sent from this app, in this session | the 320 px thumbnail made on the device when it was sent |
+| Sent from this app, earlier (or by any `sendMedia` client) | its `jpegThumbnail`: Evolution passes none to Baileys, so Baileys `generateThumbnail` makes one with sharp, 32 px wide, quality 50; it looks soft |
+| Without `jpegThumbnail` (another client, an old record) | the photo is downloaded with `getBase64FromMediaMessage` and reduced to 320 px, see below |
+
+The download for a missing thumbnail runs only for bubbles that are rendered (the conversation's window),
+one at a time, at most once per message. The last 24 are kept in memory (their object URLs are revoked
+when they go) and they are never written to the localStorage cache, which also drops every
+`jpegThumbnail` before saving. `getBase64FromMediaMessage` takes `{message: proto.WebMessageInfo,
+convertToMp4?}` with no schema; the server looks the message up by `key.id`, so the key is enough.
+
 ### Errors
 
 | Condition | Screen |
@@ -236,8 +273,9 @@ so the app shows “Can't reach the server”.
   chat, in localStorage, so an opened chat stops being highlighted even if the server count lags.
 - **No WebSocket:** only polling is used. Evolution's Socket.io is optional and may later replace the
   3 s / 5 s polling.
-- **Media:** only photos (View) and voice/audio messages (play) are downloaded. Videos, stickers and
-  documents keep their marker. Downloads live in memory for the session (the last 6) and are never stored.
+- **Media:** only photos (thumbnails without `jpegThumbnail`, View) and voice/audio messages (play) are
+  downloaded. Videos never play (a thumbnail at most); stickers and documents keep their marker. Audio lives
+  in memory for the session (the last 6), a photo in full only while it is open; nothing is stored.
 - **Profile pictures** are WhatsApp CDN URLs (`pps.whatsapp.net`) loaded with `<img>`, so they need the
   phone's internet like the rest of the app, and expire after a while (hence the 24 h cache).
 
@@ -345,6 +383,13 @@ The mock (`mock/server.mjs`) returns the Evolution v2 response shapes. It follow
 (unknown instance gives 404, then a wrong key gives 401) and error bodies (`{status, error, response:
 {message}}`), and it answers CORS preflights.
 
+Photos in the mock are real JPEGs (made with sharp at start). In Família: a photo from you with the 32 px
+thumbnail Evolution makes, one from Bruno without `jpegThumbnail`, a video with a thumbnail, and one
+from Bruno with a 72 px phone thumbnail; `findMessages` returns `jpegThumbnail` as base64 like Prisma,
+the `sendMedia` answer as a numeric-key object like Evolution's HTTP layer. Test controls:
+`POST /__mock/media-delay {"ms": 1500, "fails": false}` delays (or fails with 400)
+`getBase64FromMediaMessage`, and `POST /__mock/incoming {…, "photo": true}` adds a received photo.
+
 ## Build and package
 
 ```sh
@@ -407,6 +452,12 @@ calls to the mock. It covers:
 - long messages (the first, the middle and the last of five are taller than the screen): Down and Up scroll
   through each one before going on, the list never jumps on the way (every scroll position is recorded),
   and the message menu keeps the reading place (`tests/e2e/longMessages.mjs`, shared with lumen-telegram);
+- photo thumbnails: both ways (Bruno's with its 72 px thumbnail, yours with Evolution's 32 px one, the video
+  with its play icon, and the photo without `jpegThumbnail` downloaded once and reduced to 320 px), every
+  box with the photo's proportions before and after the image arrives (no bubble moves), a new photo
+  arriving by poll, View with a slow download (loader), the photo decoded at 600 x 450, the conversation
+  inert under it, Back to the same bubble with the photo's layer dropped, and a failed download (error, focus
+  on Try again, Try again working);
 - the unzipped `.mrbd.zip` with every other origin blocked;
 - profile pictures (from `findChats`, from `fetchProfilePictureUrl`, a broken URL keeping the initials, and
   the cache on the next launch), the full-screen photo (View first, Back to the same bubble, failure with
@@ -453,6 +504,14 @@ With the CPU throttled 4x: Back 3275 → 57 ms, opening 2237 → 1029 ms. With 4
 Sending photos (measured on 2026-10-11, same settings): Back from the send screen to the conversation takes
 88 ms (median of 5, 73-90), with the focus back on Photo, and Back to the list stays at 73 ms (74 ms
 before).
+
+Photo thumbnails (0.6.1, measured on 2026-10-11, same settings; each extra chat now has two photos with
+thumbnails among its newest messages): Back from a photo in full to its conversation takes 75 ms (median of
+5, 65-78; 1035 ms in 0.6.0, where the photo was a page of its own and Back mounted the conversation again),
+with the focus back on the photo's bubble. Back to the list 81 ms (78 before), Back from the send screen 80 ms
+(92 before), launch 1561 ms (1568). Opening a chat whose newest messages include two photos takes about 100 ms
+more (median of 12: 1281 ms, 1181 ms in 0.6.0), the cost of drawing their thumbnails in larger bubbles;
+without photos it is unchanged (1239 / 1285 ms).
 
 A smoke test for a real Chromium 95 (Android System WebView version), which also runs the long-message
 scenario, is in `tests/e2e/chromium95.mjs`; its

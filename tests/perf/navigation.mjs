@@ -8,7 +8,7 @@
 //
 // Then, in a conversation, it takes a photo (the file chooser gets
 // tests/fixtures/camera.jpg) and times Back from its send screen
-// (`photoBack*`).
+// (`photoBack*`), and opens a photo in full and times Back from it (`viewBack*`).
 //
 // For each key it records, from the key's event time to the end of a frame
 // (its style, layout and paint included): `ready`, the first frame with the
@@ -153,7 +153,7 @@ async function main() {
   const mock = await startMockServer(8089);
   const server = await startStaticServer(dist, 4173);
   const browser = await chromium.launch();
-  const results = {cpu: CPU, chats: CHATS, launches: [], launchBusy: [], opens: [], backs: [], photoBacks: []};
+  const results = {cpu: CPU, chats: CHATS, launches: [], launchBusy: [], opens: [], backs: [], photoBacks: [], viewBacks: []};
   try {
     for (let launch = 0; launch < LAUNCHES; launch += 1) {
       await fetch(`${MOCK}/__mock/reset`, {method: 'POST', body: JSON.stringify({extraChats: CHATS})});
@@ -217,6 +217,30 @@ async function main() {
         if (process.env.PERF_SHOTS) {
           await page.screenshot({path: path.join(process.env.PERF_SHOTS, 'conversation-after-photo-back.png')});
         }
+
+        // A photo of the conversation in full (from its bubble's menu, View), then Back to the conversation.
+        for (let run = 0; run < RUNS; run += 1) {
+          const found = await page.evaluate(() => {
+            const bubble = [...document.querySelectorAll('.thread-shell .message-stack')]
+              .map(stack => stack.querySelector('[aria-haspopup="menu"]'))
+              .filter(element => /\bPhoto\b/.test(element?.getAttribute('aria-label') ?? '')).at(-1);
+            bubble?.focus();
+            return bubble != null;
+          });
+          if (!found) {
+            break;
+          }
+          await page.waitForTimeout(400);
+          await page.keyboard.press('Enter');
+          await page.waitForTimeout(500);
+          await page.keyboard.press('Enter');
+          await page.waitForFunction(() => document.querySelector('.photo-image')?.naturalWidth > 0, null, {timeout: 20000});
+          await page.waitForTimeout(1500);
+          const back = await timeKey(page, 'Escape', '.thread-shell', '.photo-image');
+          back.focusOk = /Photo/.test(back.focus ?? '');
+          results.viewBacks.push(back);
+          await page.waitForTimeout(1500);
+        }
       }
       await context.close();
     }
@@ -246,6 +270,10 @@ async function main() {
     photoBackFullMs: median(results.photoBacks.map(sample => sample.full)),
     photoBackBusyMs: median(results.photoBacks.map(sample => sample.busy)),
     photoBackFocusOk: results.photoBacks.every(sample => sample.focusOk),
+    viewBackFirstMs: median(results.viewBacks.map(sample => sample.first)),
+    viewBackFullMs: median(results.viewBacks.map(sample => sample.full)),
+    viewBackBusyMs: median(results.viewBacks.map(sample => sample.busy)),
+    viewBackFocusOk: results.viewBacks.every(sample => sample.focusOk),
   };
   if (process.env.PERF_OUT) fs.writeFileSync(process.env.PERF_OUT, JSON.stringify({summary, ...results}, null, 2));
   console.log(JSON.stringify(summary, null, 2));

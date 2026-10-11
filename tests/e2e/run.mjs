@@ -468,7 +468,9 @@ async function demoFlow(browser, label, appUrl = APP, {audioOutput = true} = {})
     await step(toReply, 300, '03-group', async () => {
       assert.match(page.url(), new RegExp(encodeURIComponent(HIKE)));
       assert.equal(await activeLabel(page), 'div|Reply');
-      for (const text of ['Hike Crew', 'Priya Nair', 'Leo Park', 'Photo: Trail map', 'Count me in.']) await waitForText(page, text);
+      for (const text of ['Hike Crew', 'Priya Nair', 'Leo Park', 'Trail map', 'Count me in.']) await waitForText(page, text);
+      // The demo photo has no thumbnail in its message: it is made from the packaged image.
+      await page.waitForFunction(() => document.querySelector('.thread-shell .photo-box-image')?.naturalWidth > 0, null, {timeout: 10000});
     });
     await step(['ArrowUp', 'ArrowUp', 'ArrowUp', 'ArrowUp'], 500, '04-group-reactions', async () => {
       assert.match(await activeLabel(page), /Me! Leaving at 7\., .*reactions 👍 2, ❤️ 1$/);
@@ -675,12 +677,14 @@ async function mediaFlow(browser, {audioOutput}) {
     await pressUntil(page, 'ArrowDown', /^div\|Família, /);
     await press(page, 'Enter');
     await page.waitForURL(`**/chat/${encodeURIComponent(FAMILY)}`);
-    await waitForText(page, 'Photo: Olha isso');
+    await waitForText(page, 'Olha isso');
     await page.waitForTimeout(800);
     assert.ok((await avatarSources(page)).some(src => src.endsWith('/avatar-hike.webp')), 'header picture');
     await press(page, 'ArrowDown');
     await press(page, 'ArrowLeft');
     await pressUntil(page, 'ArrowUp', /Photo: Olha isso/);
+    // Família's old photo came without a thumbnail: it was downloaded for one.
+    const requestsBefore = (await fetch(`${MOCK}/__mock/media-requests`).then(response => response.json())).length;
     await press(page, 'Enter');
     assert.equal(await activeLabel(page), 'div|View', 'View is the first menu item for a photo');
     await page.screenshot({path: path.join(outDir, 'media-2-photo-menu.png')});
@@ -688,8 +692,8 @@ async function mediaFlow(browser, {audioOutput}) {
     await page.waitForURL(/\/photo\//);
     await page.waitForFunction(() => document.querySelector('.photo-image')?.naturalWidth > 0, null, {timeout: 8000});
     const requests = await fetch(`${MOCK}/__mock/media-requests`).then(response => response.json());
-    assert.equal(requests.length, 1, 'media downloaded once, on open');
-    assert.equal(requests[0].key.remoteJid, FAMILY);
+    assert.equal(requests.length, requestsBefore + 1, 'media downloaded once, on open');
+    assert.equal(requests.at(-1).key.remoteJid, FAMILY);
     await page.screenshot({path: path.join(outDir, 'media-3-photo.png')});
     await press(page, 'Escape');
     await page.waitForURL(`**/chat/${encodeURIComponent(FAMILY)}`);
@@ -699,7 +703,7 @@ async function mediaFlow(browser, {audioOutput}) {
     await mockPost('/__mock/reset', {mediaFails: true});
     // Reloading drops the in-memory copy of the photo already opened.
     await page.reload();
-    await waitForText(page, 'Photo: Olha isso');
+    await waitForText(page, 'Olha isso');
     await page.waitForTimeout(800);
     await press(page, 'ArrowDown');
     await press(page, 'ArrowLeft');
@@ -1075,7 +1079,7 @@ async function photoFlow(browser, label) {
     assert.equal(await page.evaluate(() => history.state?.usr?.photoSend ?? false), false);
     await page.waitForFunction(() => document.querySelectorAll('.sent-photo').length === 1);
     assert.match((await bubbles()).at(-1), /^Actions for message: You: Photo: Pôr do sol no parque, .*, Sending…$/);
-    await page.waitForFunction(() => document.querySelector('.sent-photo-thumbnail')?.naturalWidth > 0);
+    await page.waitForFunction(() => document.querySelector('.sent-photo .photo-box-image')?.naturalWidth > 0);
     await shot('photo-3-sending');
     await waitForFocus(page, /^div\|Photo$/);
     for (let i = 0; i < 40 && !(await bubbles()).some(text => text.endsWith(', Sent')); i += 1) await page.waitForTimeout(100);
@@ -1144,6 +1148,91 @@ async function photoFlow(browser, label) {
     assert.equal(sent.length, 3);
     assert.deepEqual([sent[2].width, sent[2].height, sent[2].head], [1200, 1600, 'ffd8ff'], 'reduced to fit 1600 px');
     assert.equal(sent[2].caption, 'Segunda', 'the caption stays through Retake');
+    assert.deepEqual(problems, []);
+  } finally {
+    await context.close();
+  }
+}
+
+/**
+ * Thumbnails in every photo bubble, both ways: from the message's jpegThumbnail
+ * (a phone's, Evolution's own), downloaded for a photo without one, a video's
+ * with a play icon, a photo arriving while the chat is open; then a photo in
+ * full (loading, at most 600 px, Back to its bubble) and a failed download.
+ */
+async function thumbnailsFlow(browser, label) {
+  await mockPost('/__mock/reset');
+  const {context, page, problems} = await newPage(browser);
+  const shot = name => page.screenshot({path: path.join(outDir, `${label}-${name}.png`)});
+  const boxes = () => page.$$eval('.thread-shell .photo-box', items => items.map(box => {
+    const image = box.querySelector('img');
+    const stack = box.closest('.message-stack')?.querySelector('[aria-haspopup="menu"]');
+    return {
+      label: stack?.getAttribute('aria-label') ?? '',
+      image: image && image.complete && image.naturalWidth > 0 ? `${image.src.slice(0, 5)}:${image.naturalWidth}` : null,
+      shape: Math.round((box.getBoundingClientRect().height / box.getBoundingClientRect().width) * 100),
+      play: box.querySelector('.photo-box-play') != null,
+    };
+  }));
+  const find = async pattern => (await boxes()).find(box => pattern.test(box.label));
+  try {
+    await page.goto(`${APP}/?${configQuery()}`);
+    await waitForText(page, 'Família');
+    await pressUntil(page, 'ArrowDown', /^div\|Família, /);
+    await press(page, 'Enter');
+    await waitForText(page, 'Olha isso');
+    // The old photo (no thumbnail in the message) gets one made here: until then its box keeps its shape.
+    const before = await find(/Sem miniatura/);
+    await page.waitForFunction(() => [...document.querySelectorAll('.thread-shell .photo-box img')].some(image => image.src.startsWith('blob:') && image.naturalWidth > 0), null, {timeout: 8000});
+    await page.waitForTimeout(400);
+    const received = await find(/Bruno Lima: Photo: Olha isso/);
+    const yours = await find(/You: Photo: Foto do almoço/);
+    const video = await find(/Video: Vídeo da trilha/);
+    const without = await find(/Sem miniatura/);
+    assert.deepEqual([received.image, yours.image, video.image, without.image], ['data::72', 'data::32', 'data::72', 'blob::320'], 'a phone’s thumbnail, Evolution’s, a video’s, and one made here');
+    assert.ok(video.play && !received.play, 'a play icon on the video only');
+    assert.deepEqual([received.shape, yours.shape, without.shape], [75, 75, 75], 'boxes with the photos’ 4:3 shape');
+    assert.equal(before?.shape, without.shape, 'nothing moves when the thumbnail arrives');
+    const requests = await fetch(`${MOCK}/__mock/media-requests`).then(response => response.json());
+    assert.equal(requests.length, 1, 'only the photo without a thumbnail was downloaded');
+    await shot('thumbnails-1-both-ways');
+
+    // A photo arriving while the conversation is open comes with its thumbnail.
+    await mockPost('/__mock/incoming', {remoteJid: FAMILY, pushName: 'Bruno Lima', text: 'Chegando', photo: true});
+    for (let i = 0; i < 60 && !(await find(/Photo: Chegando/))?.image; i += 1) await page.waitForTimeout(100);
+    assert.equal((await find(/Photo: Chegando/))?.image, 'data::72', 'live photo with its thumbnail');
+    await shot('thumbnails-2-live');
+
+    // In full: loading, then the photo at most 600 px; Back to its bubble.
+    await press(page, 'ArrowDown');
+    await press(page, 'ArrowLeft');
+    await pressUntil(page, 'ArrowUp', /Photo: Olha isso/, 6);
+    await mockPost('/__mock/media-delay', {ms: 1500});
+    await press(page, 'Enter');
+    await press(page, 'Enter');
+    await waitForText(page, 'Loading photo', 2000);
+    await shot('thumbnails-3-loading');
+    await page.waitForFunction(() => document.querySelector('.photo-view-layer .photo-image')?.naturalWidth > 0, null, {timeout: 8000});
+    assert.deepEqual(await page.$eval('.photo-view-layer .photo-image', image => [image.naturalWidth, image.naturalHeight]), [600, 450], 'decoded at most 600 px');
+    assert.equal(await page.$eval('.kept-page:not(.chat-list)', conversation => conversation.inert), true, 'the conversation under it is inert');
+    await shot('thumbnails-4-open');
+    await page.keyboard.press('Escape');
+    await waitForFocus(page, /Photo: Olha isso/, 2000);
+    assert.equal(new URL(page.url()).pathname, `/chat/${encodeURIComponent(FAMILY)}`);
+    await page.waitForFunction(() => document.querySelector('.photo-view-layer') == null, null, {timeout: 5000});
+
+    // A failed download: the error and Try again; Back to the bubble.
+    await mockPost('/__mock/media-delay', {ms: 0, fails: true});
+    await press(page, 'Enter');
+    await press(page, 'Enter');
+    await waitForText(page, "Couldn't load the photo");
+    await waitForFocus(page, /^div\|Try again$/);
+    await shot('thumbnails-5-error');
+    await mockPost('/__mock/media-delay', {ms: 0, fails: false});
+    await press(page, 'Enter');
+    await page.waitForFunction(() => document.querySelector('.photo-view-layer .photo-image')?.naturalWidth > 0, null, {timeout: 8000});
+    await page.keyboard.press('Escape');
+    await waitForFocus(page, /Photo: Olha isso/, 2000);
     assert.deepEqual(problems, []);
   } finally {
     await context.close();
@@ -1379,6 +1468,8 @@ async function run() {
         });
 
         await test(`[${name}] Back to a long list: kept mounted, focus on the chat; rows and messages in windows`, () => keptListFlow(browser));
+
+        await test(`[${name}] photo thumbnails both ways, a photo in full (loading, 600 px, Back to its bubble), a failed download`, () => thumbnailsFlow(browser, name));
 
         await test(`[${name}] photos: take, caption, send, sending/sent/not sent, Try again, Cancel, Back, Retake`, () => photoFlow(browser, name));
 

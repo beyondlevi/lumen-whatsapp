@@ -10,9 +10,11 @@
 //   apikey:   "mock-api-key" (fake, local only)
 // Test controls (not part of Evolution):
 //   POST /__mock/reset              {downForMs?, extraChats?, failPhotos?}  reseed; refuse connections for downForMs;
-//                                   extraChats adds that many older chats (30+ messages each) for load tests
+//                                   extraChats adds that many older chats (30+ messages each, two of them
+//                                   photos with thumbnails) for load tests
 //                                   failPhotos: that many sendMedia calls fail with a 500
-//   POST /__mock/incoming           {remoteJid, text, pushName?}  deliver a new message
+//   POST /__mock/incoming           {remoteJid, text, pushName?, photo?}  deliver a new message (a photo with
+//                                   a phone's thumbnail and `text` as caption when photo is true)
 //   GET  /__mock/sent               messages sent through sendText
 //   GET  /__mock/reactions          reactions sent through sendReaction
 //   GET  /__mock/media-requests     keys asked from getBase64FromMediaMessage
@@ -21,11 +23,20 @@
 //                                   every sendMedia answers after delayMs (an upload over the phone's internet)
 //   GET  /__mock/photos             photos sent through sendMedia ({number, mediatype, mimetype, caption, fileName, bytes, head, width, height})
 //   GET  /__mock/files/<name>       profile pictures (files from src/demo/assets)
+//   POST /__mock/media-delay        {ms, fails?}  getBase64FromMediaMessage answers after ms (with a 400 when fails)
 // fetchProfilePictureUrl and getBase64FromMediaMessage serve the fictional
-// demo assets; reset with {mediaFails: true} makes media downloads fail (400).
+// demo assets (photos as JPEG); reset with {mediaFails: true} makes media downloads fail (400).
+//
+// Photos and videos carry imageMessage/videoMessage.jpegThumbnail as Evolution
+// 2.3.7 stores and returns it from findMessages: plain base64 (Prisma writes
+// proto bytes that way). A photo from a phone has a thumbnail of about 72 px;
+// one that Evolution sent (sendMedia) has Baileys' 32 px one; an old photo in
+// Família has none. sendMedia answers with the thumbnail as Evolution's HTTP
+// responses carry it: a Uint8Array serialized as {"0": 255, "1": 216, …}.
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
+import sharp from 'sharp';
 
 const ASSETS = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../src/demo/assets');
 const FILE_TYPES = {'.webp': 'image/webp', '.ogg': 'audio/ogg'};
@@ -40,6 +51,41 @@ let mediaFails = false;
 /** sendMedia calls left to refuse with a 500 (reset {failPhotos}). */
 let photoFailures = 0;
 let photoDelayMs = 0;
+let mediaDelayMs = 0;
+/** The photos the mock serves, as JPEG, with their thumbnails (made once, see prepareMedia). */
+const media = {};
+
+/** A JPEG thumbnail as base64: about 72 px wide like a phone's, or 32 px like the one Baileys makes. */
+async function thumbnailOf(bytes, width) {
+  return (await sharp(bytes).resize(width).jpeg({quality: 50}).toBuffer()).toString('base64');
+}
+
+async function prepareMedia() {
+  if (media.sketch) return;
+  for (const [name, file] of [['sketch', 'photo-sketch.webp'], ['trail', 'photo-trail-map.webp']]) {
+    const image = sharp(fs.readFileSync(path.join(ASSETS, file)));
+    const {width, height} = await image.metadata();
+    const jpeg = await image.jpeg({quality: 85}).toBuffer();
+    media[name] = {jpeg, width, height, phoneThumbnail: await thumbnailOf(jpeg, 72), evolutionThumbnail: await thumbnailOf(jpeg, 32)};
+  }
+}
+
+/** imageMessage (or videoMessage) of a seeded photo; `thumbnail`: 'phone', 'evolution' or none. */
+function photoPart(name, caption, thumbnail) {
+  const photo = media[name];
+  return {
+    caption,
+    mimetype: 'image/jpeg',
+    width: photo.width,
+    height: photo.height,
+    ...(thumbnail ? {jpegThumbnail: thumbnail === 'phone' ? photo.phoneThumbnail : photo.evolutionThumbnail} : {}),
+  };
+}
+
+/** A Uint8Array as JSON.stringify writes it (Evolution's HTTP answers): {"0": 255, "1": 216, …}. */
+function bytesAsObject(base64) {
+  return Object.fromEntries([...Buffer.from(base64, 'base64')].map((byte, index) => [index, byte]));
+}
 let idCounter = 0;
 
 function nextId(prefix) {
@@ -88,8 +134,16 @@ function seed() {
     // Family group: photo from Bruno, read.
     record({remoteJid: family, fromMe: false, pushName: 'Bruno Lima', participant: bruno, secondsAgo: 5400, status: 'READ', ...text('Almoço no domingo?')}),
     record({remoteJid: family, fromMe: true, secondsAgo: 5300, status: 'READ', ...text('Eu vou')}),
-    record({remoteJid: family, fromMe: false, pushName: 'Bruno Lima', participant: bruno, secondsAgo: 5000, status: 'READ',
-      messageType: 'imageMessage', message: {imageMessage: {caption: 'Olha isso', mimetype: 'image/jpeg'}}}),
+    // Photos in both directions: yours, sent by Evolution (32 px thumbnail), an
+    // old one with no thumbnail, a video with a thumbnail, and Bruno's from his phone.
+    {...record({remoteJid: family, fromMe: true, secondsAgo: 5200, status: 'READ',
+      messageType: 'imageMessage', message: {imageMessage: photoPart('sketch', 'Foto do almoço', 'evolution')}}), _file: 'sketch'},
+    {...record({remoteJid: family, fromMe: false, pushName: 'Bruno Lima', participant: bruno, secondsAgo: 5150, status: 'READ',
+      messageType: 'imageMessage', message: {imageMessage: photoPart('sketch', 'Sem miniatura', null)}}), _file: 'sketch'},
+    record({remoteJid: family, fromMe: false, pushName: 'Bruno Lima', participant: bruno, secondsAgo: 5100, status: 'READ',
+      messageType: 'videoMessage', message: {videoMessage: {...photoPart('trail', 'Vídeo da trilha', 'phone'), mimetype: 'video/mp4', seconds: 12}}}),
+    {...record({remoteJid: family, fromMe: false, pushName: 'Bruno Lima', participant: bruno, secondsAgo: 5000, status: 'READ',
+      messageType: 'imageMessage', message: {imageMessage: photoPart('trail', 'Olha isso', 'phone')}}), _file: 'trail'},
     // Carla: last message is our voice note (yesterday).
     record({remoteJid: carla, fromMe: false, pushName: 'Carla Dias', secondsAgo: 90000, status: 'READ', ...text('Me manda o endereço?')}),
     record({remoteJid: carla, fromMe: true, secondsAgo: 86500, status: 'READ', messageType: 'audioMessage',
@@ -144,8 +198,12 @@ function addExtraChats(seeded, count) {
     const unread = index % 3 === 0;
     for (let step = 34; step >= 0; step -= 1) {
       const fromMe = step % 4 === 1;
-      seeded.messages.push(record({remoteJid: jid, fromMe, pushName: fromMe ? null : name, secondsAgo: newest + step * 120,
-        status: fromMe || !unread || step > 1 ? 'READ' : undefined, ...text(FILLER[(index + step) % FILLER.length])}));
+      // Two photos with their thumbnails (one each way) among the newest messages.
+      const content = step === 2 || step === 5
+        ? {messageType: 'imageMessage', message: {imageMessage: photoPart('trail', FILLER[3], step === 5 ? 'evolution' : 'phone')}}
+        : text(FILLER[(index + step) % FILLER.length]);
+      seeded.messages.push({...record({remoteJid: jid, fromMe, pushName: fromMe ? null : name, secondsAgo: newest + step * 120,
+        status: fromMe || !unread || step > 1 ? 'READ' : undefined, ...content}), _file: 'trail'});
     }
     seeded.contacts.push({remoteJid: jid, pushName: name, type: 'contact'});
     seeded.chatNames[jid] = name;
@@ -175,6 +233,7 @@ function jpegSize(bytes) {
 
 function reset(downForMs = 0, failMedia = false, extraChats = 0, failPhotos = 0) {
   idCounter = 0;
+  mediaDelayMs = 0;
   mediaFails = failMedia;
   photoFailures = failPhotos;
   photoDelayMs = 0;
@@ -196,7 +255,7 @@ function cleanLastMessage(message) {
 }
 
 function publicRecord(message) {
-  const {_unread, ...rest} = message;
+  const {_unread, _file, _bytes, ...rest} = message;
   return rest;
 }
 
@@ -307,8 +366,11 @@ async function handle(req, res) {
     }
     if (url.pathname === '/__mock/incoming' && req.method === 'POST') {
       const body = await readJson(req);
-      const message = record({remoteJid: body.remoteJid, fromMe: false, pushName: body.pushName ?? null,
-        secondsAgo: 0, ...text(String(body.text))});
+      const content = body.photo
+        ? {messageType: 'imageMessage', message: {imageMessage: photoPart('trail', String(body.text ?? ''), 'phone')}}
+        : text(String(body.text));
+      const message = {...record({remoteJid: body.remoteJid, fromMe: false, pushName: body.pushName ?? null,
+        secondsAgo: 0, ...content}), ...(body.photo ? {_file: 'trail'} : {})};
       state.messages.push(message);
       return send(res, 200, {ok: true, id: message.key.id}, origin);
     }
@@ -322,6 +384,12 @@ async function handle(req, res) {
       const body = await readJson(req);
       photoFailures = Number(body.count) || 0;
       photoDelayMs = Number(body.delayMs) || 0;
+      return send(res, 200, {ok: true}, origin);
+    }
+    if (url.pathname === '/__mock/media-delay' && req.method === 'POST') {
+      const body = await readJson(req);
+      mediaDelayMs = Number(body.ms) || 0;
+      mediaFails = body.fails === true;
       return send(res, 200, {ok: true}, origin);
     }
     if (url.pathname === '/__mock/photos' && req.method === 'GET') {
@@ -393,14 +461,17 @@ async function handle(req, res) {
       if (mediaFails || !target || (part !== 'imageMessage' && part !== 'audioMessage')) {
         return send(res, 400, errorBody(400, 'Bad Request', [mediaFails ? 'Error: Download Media failed' : 'The message is not of the media type']), origin);
       }
+      if (mediaDelayMs > 0) await new Promise(resolve => setTimeout(resolve, mediaDelayMs));
       const isImage = part === 'imageMessage';
-      const data = fs.readFileSync(path.join(ASSETS, isImage ? 'photo-trail-map.webp' : 'voice-note.ogg'));
+      const data = isImage
+        ? target._bytes ?? media[target._file ?? 'trail'].jpeg
+        : fs.readFileSync(path.join(ASSETS, 'voice-note.ogg'));
       return send(res, 201, {
         mediaType: part,
-        fileName: `${key.id}.${isImage ? 'webp' : 'ogg'}`,
+        fileName: `${key.id}.${isImage ? 'jpeg' : 'ogg'}`,
         caption: target.message?.[part]?.caption,
         size: {fileLength: data.length},
-        mimetype: isImage ? 'image/webp' : 'audio/ogg; codecs=opus',
+        mimetype: isImage ? 'image/jpeg' : 'audio/ogg; codecs=opus',
         base64: data.toString('base64'),
         buffer: null,
       }, origin);
@@ -459,11 +530,14 @@ async function handle(req, res) {
       state.photos.push({number: body.number, mediatype: body.mediatype, mimetype: body.mimetype ?? null, caption: body.caption ?? null,
         fileName: body.fileName ?? null, bytes: bytes.length, head: bytes.subarray(0, 3).toString('hex'), width: size?.width ?? null, height: size?.height ?? null});
       const remoteJid = String(body.number).includes('@') ? String(body.number) : `${body.number}@s.whatsapp.net`;
-      const message = record({remoteJid, fromMe: true, secondsAgo: 0, messageType: 'imageMessage',
-        message: {imageMessage: {mimetype: body.mimetype ?? 'image/jpeg', ...(body.caption ? {caption: body.caption} : {})}}});
+      // Like Baileys: a 32 px thumbnail and the size, kept with the message.
+      const message = {...record({remoteJid, fromMe: true, secondsAgo: 0, messageType: 'imageMessage',
+        message: {imageMessage: {mimetype: body.mimetype ?? 'image/jpeg', ...(body.caption ? {caption: body.caption} : {}),
+          ...(size ? {width: size.width, height: size.height} : {}), jpegThumbnail: await thumbnailOf(bytes, 32)}}}), _bytes: bytes};
       state.messages.push(message);
-      const {id, MessageUpdate, _unread, ...response} = message;
-      return send(res, 201, {...response, status: 'PENDING'}, origin);
+      const {id, MessageUpdate, _unread, _bytes, ...response} = message;
+      const answered = {...response.message.imageMessage, jpegThumbnail: bytesAsObject(response.message.imageMessage.jpegThumbnail)};
+      return send(res, 201, {...response, message: {imageMessage: answered}, status: 'PENDING'}, origin);
     }
     case 'POST message/sendReaction': {
       const target = state.messages.find(message => message.key.id === body?.key?.id);
@@ -484,7 +558,8 @@ async function handle(req, res) {
   }
 }
 
-export function startMockServer(port = 8089, host = '127.0.0.1') {
+export async function startMockServer(port = 8089, host = '127.0.0.1') {
+  await prepareMedia();
   reset();
   const server = http.createServer((req, res) => {
     handle(req, res).catch(error => {
