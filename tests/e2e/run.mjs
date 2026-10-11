@@ -79,19 +79,29 @@ async function pressUntil(page, key, pattern, max = 8) {
   throw new Error(`focus never matched ${pattern}; last: ${await activeLabel(page)}`);
 }
 
+// The chat list stays in the page while a chat is open, under the routes and
+// aria-hidden; the helpers below look at what is on screen only.
 async function waitForText(page, text, timeout = 10000) {
-  await page.getByText(text, {exact: false}).first().waitFor({state: 'visible', timeout});
+  const matches = page.getByText(text, {exact: false}).filter({visible: true});
+  const started = Date.now();
+  for (;;) {
+    for (let i = await matches.count(); i > 0; i -= 1) {
+      if (await matches.nth(i - 1).evaluate(element => element.closest('.kept-page--hidden') == null).catch(() => false)) return;
+    }
+    if (Date.now() - started > timeout) throw new Error(`text never shown: ${text}`);
+    await page.waitForTimeout(100);
+  }
 }
 
 async function bubbleLabels(page) {
   return page.$$eval('.message-stack [aria-label]', elements =>
-    elements.map(element => element.getAttribute('aria-label')),
+    elements.filter(element => !element.closest('[aria-hidden="true"]')).map(element => element.getAttribute('aria-label')),
   );
 }
 
 async function rowLabels(page) {
   return page.$$eval('[role="button"][aria-label]', elements =>
-    elements.map(element => element.getAttribute('aria-label')),
+    elements.filter(element => !element.closest('[aria-hidden="true"]')).map(element => element.getAttribute('aria-label')),
   );
 }
 
@@ -181,7 +191,7 @@ async function mainFlow(browser, label, appUrl = APP) {
       ],
       `chat rows (status@broadcast hidden): ${JSON.stringify(rows)}`,
     );
-    const unread = await page.$$eval('[role="img"][aria-label$="Unread Status"]', e => e.map(x => x.getAttribute('aria-label')));
+    const unread = await page.$$eval('[role="img"][aria-label$="Unread Status"]', e => e.filter(x => !x.closest('[aria-hidden="true"]')).map(x => x.getAttribute('aria-label')));
     assert.deepEqual(unread, ['Ana Souza, Unread Status', 'Unknown contact, Unread Status']);
     assert.match(await activeLabel(page), /^div\|Ana Souza, /, 'first chat has initial focus');
     await page.screenshot({path: path.join(outDir, `${label}-1-list.png`)});
@@ -300,7 +310,7 @@ async function mainFlow(browser, label, appUrl = APP) {
       null,
       {timeout: 8000},
     );
-    const unreadNow = await page.$$eval('[role="img"][aria-label$="Unread Status"]', e => e.map(x => x.getAttribute('aria-label')));
+    const unreadNow = await page.$$eval('[role="img"][aria-label$="Unread Status"]', e => e.filter(x => !x.closest('[aria-hidden="true"]')).map(x => x.getAttribute('aria-label')));
     assert.ok(unreadNow.includes('Carla Dias, Unread Status'), 'new message is highlighted as unread');
     assert.ok(!unreadNow.includes('Ana Souza, Unread Status'), 'read chat is not highlighted');
     await page.screenshot({path: path.join(outDir, `${label}-6-list-new.png`)});
@@ -415,7 +425,7 @@ async function demoFlow(browser, label, appUrl = APP, {audioOutput = true} = {})
       shots.push(name);
     }
   };
-  const unreadRows = () => page.$$eval('[role="img"][aria-label$="Unread Status"]', e => e.map(x => x.getAttribute('aria-label')));
+  const unreadRows = () => page.$$eval('[role="img"][aria-label$="Unread Status"]', e => e.filter(x => !x.closest('[aria-hidden="true"]')).map(x => x.getAttribute('aria-label')));
   // On entry, focus lands on Reply or on the newest bubble; Down then Left
   // always ends on Reply.
   const toReply = ['ArrowDown', 'ArrowLeft'];
@@ -954,7 +964,9 @@ async function openVoiceSearch(page) {
 
 /** The result rows (titles and subtitles) of the voice search. */
 async function resultRows(page) {
-  return page.$$eval('[role="button"][aria-label]', elements => elements.map(element => element.getAttribute('aria-label')));
+  return page.$$eval('[role="button"][aria-label]', elements =>
+    elements.filter(element => !element.closest('[aria-hidden="true"]')).map(element => element.getAttribute('aria-label')),
+  );
 }
 
 /** Voice search with SpeechRecognition, window.lumen.audio, fallbacks and errors. */
@@ -1031,7 +1043,7 @@ async function voiceSearchFlow(browser, label) {
     await page.waitForTimeout(800);
     await press(page, 'Escape');
     await page.waitForURL(url => new URL(url).pathname === '/');
-    await page.getByText('Bruno Lima').first().waitFor({state: 'visible', timeout: 12000});
+    await waitForText(page, 'Bruno Lima', 12000);
 
     // A community and its announcements group (same name): one row.
     await page.waitForTimeout(800);
