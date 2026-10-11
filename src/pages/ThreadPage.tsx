@@ -12,8 +12,8 @@ import {
   type ButtonHandle,
   type PageHandle,
 } from '@wearables-ui-toolkit/mrbd';
-import {useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type FocusEvent} from 'react';
-import {Navigate, useLocation, useNavigate, useParams} from 'react-router-dom';
+import {memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type FocusEvent} from 'react';
+import {Navigate, useLocation, useNavigate, useParams, type NavigateFunction} from 'react-router-dom';
 import {avatarFallback} from '../components/avatarFallback';
 import {MessageBubble} from '../components/MessageBubble';
 import {isGroupJid, type ChatMessage} from '../evolution/parse';
@@ -38,6 +38,8 @@ export function photoPath(jid: string, messageId: string): string {
 export function ThreadPage() {
   const {jid} = useParams();
   const {phase} = useWhatsApp();
+  const location = useLocation();
+  const navigate = useNavigate();
 
   if (!jid) {
     return <Navigate to="/" replace />;
@@ -45,8 +47,15 @@ export function ThreadPage() {
   if (phase.kind !== 'ready') {
     return <StatusPage phase={phase} />;
   }
-  return <Thread jid={jid} />;
+  const composerOpen =
+    location.state != null &&
+    typeof location.state === 'object' &&
+    'replyComposer' in location.state &&
+    location.state.replyComposer === true;
+  return <Thread jid={jid} pathname={location.pathname} locationKey={location.key} composerOpen={composerOpen} navigate={navigate} />;
 }
+
+type ThreadProps = {jid: string; pathname: string; locationKey: string; composerOpen: boolean; navigate: NavigateFunction};
 
 /** Header height, measured once laid out and on resize; 0 until known. */
 function useHeaderHeight(pageRef: {current: PageHandle | null}): number {
@@ -64,11 +73,12 @@ function useHeaderHeight(pageRef: {current: PageHandle | null}): number {
   return height;
 }
 
-function Thread({jid}: {jid: string}) {
+// A page stays rendered while the next one comes in, and every navigation
+// gives it a new location object; with primitives for props, the conversation
+// is not drawn again on its way out (Back to the list).
+const Thread = memo(function Thread({jid, pathname, locationKey, composerOpen, navigate}: ThreadProps) {
   const {chatFor, thread, openThread, sendText, sendReaction, offline, avatarFor, requestAvatar, loadMedia, audio: lumenAudio, transcriptFor, contactName} =
     useWhatsApp();
-  const location = useLocation();
-  const navigate = useNavigate();
   const chat = chatFor(jid);
   // A contact found by voice search may have no conversation in the list yet.
   const savedName = chat?.name ?? contactName(jid);
@@ -95,11 +105,6 @@ function Thread({jid}: {jid: string}) {
   );
   const [audio, toggleAudio] = useAudioPlayer(loadMedia, showAudioError);
 
-  const composerOpen =
-    location.state != null &&
-    typeof location.state === 'object' &&
-    'replyComposer' in location.state &&
-    location.state.replyComposer === true;
   const composerWasOpenRef = useRef(false);
   useLayoutEffect(() => {
     if (composerWasOpenRef.current && !composerOpen) {
@@ -114,14 +119,24 @@ function Thread({jid}: {jid: string}) {
     (message: ChatMessage | null) => {
       setQuoted(message);
       if (!composerOpen) {
-        navigate(location.pathname, {state: {replyComposer: true}});
+        navigate(pathname, {state: {replyComposer: true}});
       }
     },
-    [composerOpen, location.pathname, navigate],
+    [composerOpen, navigate, pathname],
   );
   const startReply = useCallback(() => openComposer(null), [openComposer]);
-  const viewPhoto = useCallback((message: ChatMessage) => navigate(photoPath(jid, message.id)), [jid, navigate]);
-  const transcribe = useCallback((message: ChatMessage) => navigate(transcriptPath(jid, message.id)), [jid, navigate]);
+  const viewPhoto = useCallback(
+    (message: ChatMessage) => {
+      navigate(photoPath(jid, message.id));
+    },
+    [jid, navigate],
+  );
+  const transcribe = useCallback(
+    (message: ChatMessage) => {
+      navigate(transcriptPath(jid, message.id));
+    },
+    [jid, navigate],
+  );
   const record = useCallback(() => {
     returnToVoice.pending = true;
     navigate(recordPath(jid));
@@ -129,7 +144,7 @@ function Thread({jid}: {jid: string}) {
   // Back from the recording screen lands on Voice. Focus is restored by row
   // position, which a just-sent voice note shifts by one, so set it here.
   useEffect(() => {
-    if (!returnToVoice.pending || location.pathname !== `/chat/${encodeURIComponent(jid)}`) {
+    if (!returnToVoice.pending || pathname !== `/chat/${encodeURIComponent(jid)}`) {
       return;
     }
     returnToVoice.pending = false;
@@ -137,7 +152,7 @@ function Thread({jid}: {jid: string}) {
       frame = window.requestAnimationFrame(() => voiceButtonRef.current?.getElement()?.focus({preventScroll: true}));
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [jid, location.key, location.pathname]);
+  }, [jid, locationKey, pathname]);
 
   const react = useCallback(
     (message: ChatMessage, emoji: string) => {
@@ -313,4 +328,4 @@ function Thread({jid}: {jid: string}) {
       </div>
     </Page>
   );
-}
+});
