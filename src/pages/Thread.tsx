@@ -1,6 +1,6 @@
 // A conversation: its messages (in a window, see useMessageWindow), the reply
-// field and the Reply | Voice | Photos rail.
-import imageFilled from '@wearables-ui-toolkit/icons/svg/image__filled.svg';
+// field and the Reply | Voice | Photo rail.
+import takePhotoIcon from '@wearables-ui-toolkit/icons/svg/camera__filled.svg';
 import microphoneFilled from '@wearables-ui-toolkit/icons/svg/microphone__filled.svg';
 import {
   Button,
@@ -24,6 +24,7 @@ import {
   useState,
   type CSSProperties,
   type FocusEvent,
+  type RefObject,
 } from 'react';
 import type {NavigateFunction} from 'react-router-dom';
 import {avatarFallback} from '../components/avatarFallback';
@@ -48,13 +49,21 @@ export function photoPath(jid: string, messageId: string): string {
   return `/chat/${encodeURIComponent(jid)}/photo/${encodeURIComponent(messageId)}`;
 }
 
-export type ThreadProps = {jid: string; pathname: string; locationKey: string; composerOpen: boolean; navigate: NavigateFunction};
+export type ThreadProps = {
+  jid: string;
+  pathname: string;
+  locationKey: string;
+  composerOpen: boolean;
+  navigate: NavigateFunction;
+  onTakePhoto: () => void;
+  photoButtonRef: RefObject<ButtonHandle | null>;
+};
 
 // A page stays rendered while the next one comes in, and every navigation
 // gives it a new location object; with primitives for props, the conversation
 // is not drawn again on its way out (Back to the list).
-export const Thread = memo(function Thread({jid, pathname, locationKey, composerOpen, navigate}: ThreadProps) {
-  const {chatFor, thread, openThread, sendText, sendReaction, offline, avatarFor, requestAvatar, loadMedia, audio: lumenAudio, transcriptFor, contactName} =
+export const Thread = memo(function Thread({jid, pathname, locationKey, composerOpen, navigate, onTakePhoto, photoButtonRef}: ThreadProps) {
+  const {chatFor, thread, openThread, sendText, sendReaction, offline, avatarFor, requestAvatar, loadMedia, audio: lumenAudio, transcriptFor, contactName, sentPhoto, retryPhoto, discardPhoto} =
     useWhatsApp();
   const chat = chatFor(jid);
   // A contact found by voice search may have no conversation in the list yet.
@@ -136,6 +145,9 @@ export const Thread = memo(function Thread({jid, pathname, locationKey, composer
     });
     return () => window.cancelAnimationFrame(frame);
   }, [jid, locationKey, pathname]);
+
+  const retryPhotoMessage = useCallback((message: ChatMessage) => retryPhoto(message.id), [retryPhoto]);
+  const discardPhotoMessage = useCallback((message: ChatMessage) => discardPhoto(message.id), [discardPhoto]);
 
   const react = useCallback(
     (message: ChatMessage, emoji: string) => {
@@ -252,9 +264,10 @@ export const Thread = memo(function Thread({jid, pathname, locationKey, composer
           ) : null}
           {messages.slice(messageWindow.first).map((message, offset) => {
             const index = messageWindow.first + offset;
+            const photo = sentPhoto(message.id);
             return (
               <MessageBubble
-                key={message.id}
+                key={photo?.key ?? message.id}
                 message={message}
                 showSender={isGroup && !message.fromMe && startsMessageRun(messages, index)}
                 endsRun={endsMessageRun(messages, index)}
@@ -268,6 +281,9 @@ export const Thread = memo(function Thread({jid, pathname, locationKey, composer
                 transcribeAvailable={lumenAudio != null}
                 transcript={message.content.kind === 'audio' ? transcriptFor(message.id) : null}
                 onToggleAudio={toggleAudio}
+                sentPhoto={photo}
+                onRetryPhoto={retryPhotoMessage}
+                onDiscardPhoto={discardPhotoMessage}
               />
             );
           })}
@@ -308,7 +324,13 @@ export const Thread = memo(function Thread({jid, pathname, locationKey, composer
                 initialFocusEligible={false}
                 onClick={record}
               />
-              <Button title={t('photosAction')} icon={imageFilled} disabled initialFocusEligible={false} />
+              <Button
+                ref={photoButtonRef}
+                title={t('photoAction')}
+                icon={takePhotoIcon}
+                initialFocusEligible={false}
+                onClick={onTakePhoto}
+              />
             </ButtonRail>
           )}
         </div>

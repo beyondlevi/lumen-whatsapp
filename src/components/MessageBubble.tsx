@@ -1,12 +1,15 @@
 // One chat bubble; based on the UI Toolkit messaging example. Activating a
 // bubble opens its context menu: View for photos, Listen/Pause and Transcribe
 // for voice messages, then four reactions and Reply. Reactions show as a badge
-// under the bubble's bottom-right corner.
+// under the bubble's bottom-right corner. A photo you sent this session shows
+// its thumbnail and its upload (sending, sent, not sent with Try again).
 
 import arrowBigReplyFilled from '@wearables-ui-toolkit/icons/svg/arrowbigreply__filled.svg';
 import circlePlayFilled from '@wearables-ui-toolkit/icons/svg/circleplay__filled.svg';
 import expandFilled from '@wearables-ui-toolkit/icons/svg/expand__filled.svg';
 import mediaPauseFilled from '@wearables-ui-toolkit/icons/svg/mediapause__filled.svg';
+import rotateClockwiseFilled from '@wearables-ui-toolkit/icons/svg/rotateclockwise__filled.svg';
+import trashFilled from '@wearables-ui-toolkit/icons/svg/trash__filled.svg';
 import speechBubbleMessageFilled from '@wearables-ui-toolkit/icons/svg/speechbubblemessage__filled.svg';
 import {
   ButtonContextMenuItemView,
@@ -36,6 +39,8 @@ import {describeContent, formatBubbleTime, formatDuration, isMarker, snippet} fr
 import {t} from '../i18n/strings';
 import {reactionCount, type ReactionSummary} from '../reactions';
 import type {AudioState} from '../state/useAudioPlayer';
+import type {SentPhoto} from '../state/useWhatsAppState';
+import {PHOTO_STATE_KEYS, SentPhotoContent} from './SentPhotoContent';
 
 export const REACTIONS = ['👍', '❤️', '😂', '😭'] as const;
 
@@ -58,6 +63,10 @@ type MessageBubbleProps = {
   transcribeAvailable: boolean;
   /** Transcript made this session, shown under a voice message. */
   transcript?: string | null;
+  /** A photo sent this session: its thumbnail and upload. */
+  sentPhoto?: SentPhoto | null;
+  onRetryPhoto: (message: ChatMessage) => void;
+  onDiscardPhoto: (message: ChatMessage) => void;
 };
 
 const OUTBOUND_TOKEN_NAMES = {
@@ -162,6 +171,9 @@ export function MessageBubble({
   onTranscribe,
   transcribeAvailable,
   transcript,
+  sentPhoto,
+  onRetryPhoto,
+  onDiscardPhoto,
 }: MessageBubbleProps) {
   const isOutgoing = message.fromMe;
   const isAudio = message.content.kind === 'audio';
@@ -189,9 +201,12 @@ export function MessageBubble({
   const sender = isOutgoing ? t('you') : message.senderName;
   const body = isAudio ? audioDescription(message, audio) : text;
   const spokenBase = sender ? t('bubbleLabel', {sender, text: body, time}) : `${body}, ${time}`;
-  const spoken = reactions?.length
+  const withReactions = reactions?.length
     ? `${spokenBase}, ${t('reactionsLabel', {list: reactionsText(reactions)})}`
     : spokenBase;
+  const spoken = sentPhoto ? t('photoStateLabel', {photo: withReactions, state: t(PHOTO_STATE_KEYS[sentPhoto.state])}) : withReactions;
+  // Not on the server yet: no reactions or replies, only what its upload allows.
+  const uploading = sentPhoto != null && sentPhoto.state !== 'sent';
   const reactionTotal = reactionCount(reactions);
 
   const [menuOpen, setMenuOpen] = useState(false);
@@ -239,6 +254,15 @@ export function MessageBubble({
     setMenuOpen(false);
     onTranscribe(message);
   };
+  const chooseRetry = (event?: MouseEvent<HTMLElement>) => {
+    dismissMenuToTrigger(event);
+    onRetryPhoto(message);
+  };
+  const chooseDiscard = (event?: MouseEvent<HTMLElement>) => {
+    event?.stopPropagation();
+    setMenuOpen(false);
+    onDiscardPhoto(message);
+  };
   const playing = audio?.status === 'playing';
 
   const menu = (
@@ -249,8 +273,14 @@ export function MessageBubble({
           dismissMenuToTrigger();
         }
       }}>
+      {sentPhoto?.state === 'failed' ? (
+        <ButtonContextMenuItemView title={t('retry')} icon={rotateClockwiseFilled} onClick={chooseRetry} />
+      ) : null}
       {isPhoto ? (
         <ButtonContextMenuItemView title={t('viewAction')} icon={expandFilled} onClick={chooseView} />
+      ) : null}
+      {sentPhoto?.state === 'failed' ? (
+        <ButtonContextMenuItemView title={t('discardAction')} icon={trashFilled} onClick={chooseDiscard} />
       ) : null}
       {isAudio ? (
         <ButtonContextMenuItemView
@@ -268,14 +298,16 @@ export function MessageBubble({
           onClick={chooseTranscribe}
         />
       ) : null}
-      {REACTIONS.map(emoji => (
-        <ReactionItem key={emoji} emoji={emoji} onChoose={chooseReaction} />
-      ))}
-      <ButtonContextMenuItemView
-        title={t('replyAction')}
-        icon={arrowBigReplyFilled}
-        onClick={chooseReply}
-      />
+      {uploading
+        ? null
+        : REACTIONS.map(emoji => <ReactionItem key={emoji} emoji={emoji} onChoose={chooseReaction} />)}
+      {uploading ? null : (
+        <ButtonContextMenuItemView
+          title={t('replyAction')}
+          icon={arrowBigReplyFilled}
+          onClick={chooseReply}
+        />
+      )}
     </ContextMenu>
   );
 
@@ -311,7 +343,9 @@ export function MessageBubble({
             tooltipContentDescription={t('messageActionsLabel', {message: text})}
             tooltipContent={menu}>
             <div className="message-bubble-content">
-              {isAudio ? (
+              {sentPhoto ? (
+                <SentPhotoContent photo={sentPhoto} caption={message.content.text} alt={text} />
+              ) : isAudio ? (
                 <AudioContent message={message} audio={audio} transcript={transcript} />
               ) : (
                 <TextView
